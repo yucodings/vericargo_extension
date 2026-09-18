@@ -1,0 +1,79 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "../vendor/shadcn-tailwind-4.13.0.css";
+
+:root {
+  --ink: #0c1b33;
+  --navy: #102a43;
+  --ocean: #0d6d7a;
+  --aqua: #17a6a6;
+  --sky: #e9f5f7;
+  --paper: #f5f7f8;
+  --line: #d9e1e5;
+  --muted: #627181;
+  --match: #16845b;
+  --match-bg: #e7f6ef;
+  --mismatch: #c34032;
+  --mismatch-bg: #fff0ed;
+  --review: #8a5b08;
+  --review-bg: #fff7dc;
+  --background: #f5f7f8;
+  --foreground: #0c1b33;
+  --card: #ffffff;
+  --card-foreground: #0c1b33;
+  --popover: #ffffff;
+  --popover-foreground: #0c1b33;
+  --primary: #0d6d7a;
+  --primary-foreground: #ffffff;
+  --secondary: #e9f5f7;
+  --secondary-foreground: #0d5360;
+  --muted-foreground: #627181;
+  --accent: #e9f5f7;
+  --accent-foreground: #0d5360;
+  --destructive: #c34032;
+  --border: #d9e1e5;
+  --input: #cbd7dc;
+  --ring: #17a6a6;
+  --radius: 0.75rem;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--paper);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --font-sans: "Segoe UI", Inter, Arial, sans-serif;
+}
+
+* { box-sizing: border-box; }
+html { background: var(--paper); }
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: "Segoe UI", Inter, Arial, sans-serif;
+  font-size: 16px;
+  line-height: 1.5;
+}
+button, input, select { font: inherit; }
+button, a { -webkit-tap-highlight-color: transparent; }
+::selection { background: #bce5e8; color: var(--ink); }
+.focus-ring:focus-visible { outline: 3px solid rgba(23, 166, 166, 0.35); outline-offset: 2px; }
