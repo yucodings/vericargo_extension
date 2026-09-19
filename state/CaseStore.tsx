@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, useContext, useMemo, useState } from "react";
 import type { ReviewRecord, ReviewerDecision } from "@/domain/models/detail";
 
 interface CaseStoreValue {
@@ -13,12 +13,16 @@ const CaseStore = createContext<CaseStoreValue | null>(null);
 const storageKey = "blink-demo-reviews";
 
 export function CaseStoreProvider({ children }: { children: React.ReactNode }) {
-  const [reviews, setReviews] = useState<Record<string, ReviewRecord>>({});
-
-  useEffect(() => {
+  const [reviews, setReviews] = useState<Record<string, ReviewRecord>>(() => {
+    if (typeof window === "undefined") return {};
     const saved = window.localStorage.getItem(storageKey);
-    if (saved) setReviews(JSON.parse(saved));
-  }, []);
+    if (!saved) return {};
+    try {
+      return JSON.parse(saved) as Record<string, ReviewRecord>;
+    } catch {
+      return {};
+    }
+  });
 
   const value = useMemo<CaseStoreValue>(() => ({
     reviews,

@@ -12,7 +12,7 @@ export interface BlinkCase {
   sender: string;
   subject: string;
   receivedAt: string;
-  category: "DOCUMENT_COMPARISON" | "NEW_SHIPPING_INSTRUCTION" | "INVOICE_QUERY" | "GENERAL" | "SPAM";
+  category: "DOCUMENT_COMPARISON" | "NEW_SI" | "INVOICE_QUERY" | "GENERAL" | "SPAM";
   suggestion: Suggestion;
   confidence: number | null;
   reviewStatus: ReviewStatus;

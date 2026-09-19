@@ -3,8 +3,8 @@ import "./globals.css";
 import { Providers } from "./providers";
 
 export const metadata: Metadata = {
-  title: "BLiNK Shipping Verification",
-  description: "Evidence-aware shipping document verification and human review.",
+  title: "BLiNK Gmail Shipping Assistant",
+  description: "Classify shipping emails, verify SI and Draft BL documents, and resolve discrepancies with evidence.",
   icons: { icon: "/favicon.svg", shortcut: "/favicon.svg" },
 };
 

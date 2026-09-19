@@ -1,58 +1,54 @@
-# BLiNK Shipping Verification
+# BLiNK Gmail Shipping Assistant
 
-BLiNK is a production-oriented shipping document verification interface. It demonstrates how an operations team can classify an email, compare a Shipping Instruction against a draft Bill of Lading, inspect grounded source evidence, and make a human-controlled final decision.
+BLiNK is a Gmail-first prototype for triaging shipping emails and verifying Shipping Instructions (SI) against Draft Bills of Lading (Draft BL). The root experience is a three-pane Gmail work surface: inbox, email, and a contextual BLiNK assistant.
 
-## Core rule
+## What the prototype covers
 
-The system never finalizes a match or mismatch automatically. Every document-comparison case enters the human review queue, including high-confidence suggestions. Only an explicit reviewer action can produce the final result.
+- Classifies every email as `DOCUMENT_COMPARISON`, `NEW_SI`, `INVOICE_QUERY`, `GENERAL`, or `SPAM`.
+- Treats Human Review as a workflow status with a specific reason, never as an email category.
+- Compares SI and Draft BL only for document-comparison emails.
+- Verifies exactly seven fields: shipper, consignee, notify party, ports of loading and discharge, container count, and gross weight in kilograms.
+- Shows raw values, normalized values, page references, evidence text, and decision confidence.
+- Uses “Suggested Match” or “Suggested Mismatch”; the reviewer verifies the final result.
+- Routes confidence below 90%, unresolved values, missing documents, processing failures, and critical gates to Human Review.
+- Supports Apply, Ignore, and manual Draft BL edits. Applying an edit performs a fresh Phase 5+ verification run.
+- Exports one JSON record for every demo email.
 
-## Included experience
+The twelve fixtures cover a clean match, a material mismatch, a harmless metric-unit difference, ambiguous intent, missing Draft BL, unreadable scan, low extraction confidence, editor correction, and all non-comparison categories.
 
-- Operations dashboard with review and mismatch metrics
-- Searchable, filterable inbox and case routing
-- Official seven-field SI and draft BL comparison
-- Side-by-side evidence viewer with raw and normalized values
-- Human review queue and reviewer workspace
-- Confirm Match, Confirm Mismatch, Correct Value, and Retry Processing actions
-- Audit timeline separating system suggestions from human decisions
-- Responsive desktop and mobile layouts
-- Six realistic hardcoded demo scenarios
+## Architecture
 
-## Official comparison scope
+- `app/` — Next.js App Router pages and backend route handlers
+- `features/gmail/` — Gmail-first user experience and reviewer interactions
+- `domain/models/workflow.ts` — canonical categories, reasons, stages, and seven-field model
+- `domain/workflow/verification.ts` — deterministic normalization, comparison, risk gating, and Phase 5+ reprocessing
+- `domain/submission/buildSubmission.ts` — one-record-per-email export builder
+- `data/fixtures/gmailCases.ts` — replaceable local demo repository
+- `tests/workflow.test.ts` — workflow, normalization, reprocessing, and export-contract tests
 
-1. Shipper
-2. Consignee
-3. Notify party
-4. Port of loading
-5. Port of discharge
-6. Container count
-7. Gross weight in kilograms
+Route handlers provide a boundary for production services:
 
-## Application structure
+- `GET /api/export` returns the current documented demo export shape.
+- `POST /api/cases/:caseId/verify` demonstrates the fresh-processing contract and async Next.js 16 route parameters.
 
-- `app/` – routes, root layout, metadata, and providers
-- `components/shared/` – BLiNK-specific shared components
-- `components/ui/` – reusable interface primitives
-- `features/` – dashboard, inbox, evidence, review, case detail, and audit screens
-- `domain/` – case models, risk controls, and final-decision rules
-- `data/fixtures/` – isolated demo case data
-- `state/` – local interactive demo state
+The UI currently uses fixtures so the demo remains reliable without credentials. A production adapter can replace them with Gmail OAuth/webhooks, document storage and OCR, model inference, SQL persistence, and an append-only audit log without changing the reviewer flow.
 
-## Run locally
+## Run and verify
 
 ```bash
 npm install
 npm run dev
-```
-
-Open the local URL printed by the development server.
-
-## Production build
-
-```bash
+npm test
+npm run lint
 npm run build
 ```
 
-## Data and integration status
+Node.js 22.13 or newer is required.
 
-This version is a self-contained frontend demo. It uses fixtures and browser-local review state and makes no frontend API calls. A future production backend can replace the fixture repository with services for inbox ingestion, document processing, extraction, normalization, verification, evidence mapping, SQL persistence, and audit storage without changing the primary user flow.
+## Evaluation-data note
+
+The project documents describe `sample_submission.json` as canonical, but that actual template file is not present in this workspace. The exporter implements the documented keys and includes every email. Before a formal submission, validate and adapt `domain/submission/buildSubmission.ts` against the provided canonical template without renaming its required keys.
+
+## Production readiness boundary
+
+This is a functional prototype, not a connected production mailbox. Real Gmail access, cloud document processing, hosted AI inference, durable audit storage, and production identity/authorization still require environment-specific credentials and deployment configuration.

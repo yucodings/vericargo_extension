@@ -1,5 +1,5 @@
-import { DashboardPage } from "@/features/dashboard/DashboardPage";
+import { GmailExtensionPage } from "@/features/gmail/GmailExtensionPage";
 
 export default function Home() {
-  return <DashboardPage />;
+  return <GmailExtensionPage />;
 }
