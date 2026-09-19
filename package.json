@@ -12,7 +12,7 @@
     "start": "node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js dev --config dist/server/wrangler.json --local --persist-to .wrangler/state --ip 127.0.0.1 --inspector-port 0",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "test": "node --test --experimental-strip-types tests/workflow.test.ts",
-    "extension:check": "node --check chrome-extension/sidepanel.js && node --check chrome-extension/service-worker.js",
+    "extension:check": "node --check chrome-extension/gmail-client.js && node --check chrome-extension/sidepanel.js && node --check chrome-extension/service-worker.js",
     "db:generate": "drizzle-kit generate"
   },
   "dependencies": {

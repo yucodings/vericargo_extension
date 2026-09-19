@@ -31,9 +31,18 @@ button { cursor: pointer; }
 .local-badge { border-radius: 999px; background: #e8f6f0; padding: 5px 9px; color: var(--green); font-size: 11px; font-weight: 800; }
 
 main { padding: 12px; }
-.intro { margin-bottom: 12px; border: 1px solid #bcd1f1; border-radius: 14px; background: #edf4ff; padding: 12px; color: var(--navy); }
-.intro strong { font-size: 13px; }
-.intro p { margin: 4px 0 0; color: #3b5f91; font-size: 12px; line-height: 1.45; }
+.mode-card { margin-bottom: 12px; border: 1px solid #bcd1f1; border-radius: 14px; background: #edf4ff; padding: 10px; color: var(--navy); }
+.mode-switch { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.mode-button { border: 1px solid transparent; border-radius: 10px; background: transparent; padding: 8px; color: #4b6487; font-size: 12px; font-weight: 800; }
+.mode-button.active { border-color: #a9c3eb; background: white; color: var(--blue); box-shadow: 0 3px 10px rgba(29,54,86,.08); }
+.connection-status { margin-top: 9px; font-size: 11px; line-height: 1.45; }
+.connection-status strong { display: block; font-size: 12px; }
+.connection-status p { margin: 3px 0 0; color: #4d6689; }
+.connection-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
+.connection-button { border: 1px solid #a9c3eb; border-radius: 9px; background: white; padding: 7px 10px; color: var(--blue); font-size: 11px; font-weight: 800; }
+.connection-button.primary { border-color: var(--blue); background: var(--blue); color: white; }
+.connection-button:disabled { cursor: wait; opacity: .65; }
+.connection-error { margin-top: 7px; border-radius: 8px; background: #fff0f2; padding: 7px; color: #9f243a; }
 .search-wrap { display: block; }
 .search-wrap input { width: 100%; border: 1px solid var(--line); border-radius: 999px; background: white; padding: 11px 14px; color: var(--ink); outline: none; }
 .search-wrap input:focus { border-color: #8badde; box-shadow: 0 0 0 3px rgba(11,87,208,.12); }

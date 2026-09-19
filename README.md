@@ -2,7 +2,7 @@
 
 BLiNK is a Gmail-first prototype for triaging shipping emails and verifying Shipping Instructions (SI) against Draft Bills of Lading (Draft BL). The root experience is a three-pane Gmail work surface: inbox, email, and a contextual BLiNK assistant.
 
-A locally loadable Chrome Manifest V3 side-panel extension is available in `chrome-extension/`. It can be installed with Chrome's **Load unpacked** developer workflow and does not require Chrome Web Store publication.
+A locally loadable Chrome Manifest V3 side-panel extension is available in `chrome-extension/`. It can be installed with Chrome's **Load unpacked** developer workflow and does not require Chrome Web Store publication. It provides Demo mode plus an OAuth-configurable Working mode for read-only Gmail access.
 
 ## What the prototype covers
 

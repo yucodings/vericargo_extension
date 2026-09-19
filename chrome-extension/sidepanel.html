@@ -17,11 +17,12 @@
     </header>
 
     <main>
-      <section class="intro" aria-label="Development status">
-        <div>
-          <strong>Unpacked development build</strong>
-          <p>Runs locally in Chrome. No Web Store publishing required.</p>
+      <section class="mode-card" aria-label="Extension mode">
+        <div class="mode-switch" role="group" aria-label="Choose data mode">
+          <button class="mode-button active" data-mode="demo">Demo mode</button>
+          <button class="mode-button" data-mode="working">Working mode</button>
         </div>
+        <div id="connection-status" class="connection-status"></div>
       </section>
 
       <label class="search-wrap">
@@ -47,6 +48,7 @@
       </div>
     </template>
 
+    <script src="gmail-client.js"></script>
     <script src="sidepanel.js"></script>
   </body>
 </html>
