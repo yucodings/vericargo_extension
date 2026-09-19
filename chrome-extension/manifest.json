@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "BLiNK Gmail Shipping Assistant",
+  "short_name": "BLiNK",
+  "version": "0.1.0",
+  "description": "Review shipping emails and compare Shipping Instructions with Draft Bills of Lading beside Gmail.",
+  "minimum_chrome_version": "114",
+  "permissions": ["sidePanel", "storage"],
+  "action": {
+    "default_title": "Open BLiNK"
+  },
+  "background": {
+    "service_worker": "service-worker.js"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  }
+}

@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>BLiNK</title>
+    <link rel="stylesheet" href="sidepanel.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand-mark" aria-hidden="true">✦</div>
+      <div class="brand-copy">
+        <strong>BLiNK</strong>
+        <span>Gmail shipping assistant</span>
+      </div>
+      <span class="local-badge">Local</span>
+    </header>
+
+    <main>
+      <section class="intro" aria-label="Development status">
+        <div>
+          <strong>Unpacked development build</strong>
+          <p>Runs locally in Chrome. No Web Store publishing required.</p>
+        </div>
+      </section>
+
+      <label class="search-wrap">
+        <span class="sr-only">Search demo emails</span>
+        <input id="search" type="search" placeholder="Search shipping mail" autocomplete="off" />
+      </label>
+
+      <nav class="filters" aria-label="Email filters">
+        <button class="filter active" data-filter="ALL">All</button>
+        <button class="filter" data-filter="DOCUMENT_COMPARISON">Compare</button>
+        <button class="filter" data-filter="HUMAN_REVIEW">Human Review</button>
+      </nav>
+
+      <section id="inbox" class="inbox" aria-label="Shipping email inbox"></section>
+      <section id="detail" class="detail" aria-live="polite"></section>
+    </main>
+
+    <template id="empty-state">
+      <div class="empty-state">
+        <div class="empty-icon">✉</div>
+        <h2>Select an email</h2>
+        <p>Open a case to view classification, comparison, and evidence.</p>
+      </div>
+    </template>
+
+    <script src="sidepanel.js"></script>
+  </body>
+</html>
