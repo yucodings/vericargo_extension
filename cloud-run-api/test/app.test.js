@@ -168,6 +168,45 @@ test("classification routes expose setup status and process an authenticated bat
   }
 });
 
+test("document-processing routes expose status and process an authenticated case", async () => {
+  const oauthService = {
+    authenticate: async (header) => {
+      assert.equal(header, "Bearer extension-session");
+      return { connectionId: "connection-1" };
+    },
+  };
+  const documentService = {
+    processorVersion: "processor-test",
+    processNextBatch: async (connectionId) => {
+      assert.equal(connectionId, "connection-1");
+      return { done: true, processed: 1, remaining: 0, total: 1, updates: [{ id: "message-1" }] };
+    },
+  };
+  const apiServer = createApp({ documentService, oauthService });
+  await new Promise((resolve) => apiServer.listen(0, "127.0.0.1", resolve));
+  const address = apiServer.address();
+  const apiBase = `http://127.0.0.1:${address.port}`;
+
+  try {
+    const headers = { Authorization: "Bearer extension-session" };
+    const statusResponse = await fetch(`${apiBase}/api/documents/status`, { headers });
+    assert.deepEqual(await statusResponse.json(), { configured: true, processorVersion: "processor-test" });
+
+    const processResponse = await fetch(`${apiBase}/api/documents/process`, { headers, method: "POST" });
+    assert.deepEqual(await processResponse.json(), {
+      done: true,
+      processed: 1,
+      remaining: 0,
+      total: 1,
+      updates: [{ id: "message-1" }],
+    });
+  } finally {
+    await new Promise((resolve, reject) => {
+      apiServer.close((error) => (error ? reject(error) : resolve()));
+    });
+  }
+});
+
 test("unknown routes return JSON 404 responses", async () => {
   const response = await fetch(`${baseUrl}/missing`);
 

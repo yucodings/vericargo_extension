@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "VeriCargo Gmail Shipping Assistant",
   "short_name": "VeriCargo",
-  "version": "0.6.1",
+  "version": "0.8.0",
   "description": "Review shipping emails and compare Shipping Instructions with Draft Bills of Lading beside Gmail.",
   "minimum_chrome_version": "114",
   "permissions": ["sidePanel", "storage"],

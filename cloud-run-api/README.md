@@ -33,6 +33,21 @@ The API key stays in Cloud Run. It is never shipped in the Chrome extension. The
 `POST /api/classify` endpoint processes Gmail messages in small batches and stores the category,
 confidence, evidence, model, pipeline version, and classification timestamp in Firestore. The
 first pass uses email text and attachment metadata. Only when that evidence is insufficient does
-Cloud Run retrieve up to two supported Gmail attachments for a second Gemini multimodal pass.
+Cloud Run retrieve up to two supported Gmail attachments for a second pass. Machine-readable text,
+PDF, and XLSX content uses the lightweight parser; scanned PDFs and images use Gemini Vision/OCR.
+
+For messages classified as Document Comparison, `POST /api/documents/process` processes one case
+at a time so the extension can display progressive results. It identifies one Shipping Instruction
+and one Draft Bill of Lading and extracts the seven comparison fields. It does not look up or reuse
+previous extraction artifacts. Machine-readable PDFs, text, and XLSX workbooks use a lightweight
+parser followed by Gemini semantic field extraction. Scanned PDFs and images use Gemini vision/OCR.
+Missing or ambiguous documents and unreadable or low-quality documents are stored as separate
+human-review outcomes.
+An unsupported or individually invalid attachment is recorded as an unreadable/low-quality outcome
+so it cannot stop the remaining cases in the mailbox.
+
+The seven comparison fields are shipper, consignee, notify party, port of loading, port of
+discharge, container count, and gross weight in kilograms. Each field includes the raw value,
+normalized value, confidence, page/location, and evidence snippet for both documents.
 
 Never copy an OAuth client secret or downloaded `client_secret*.json` file into this directory.

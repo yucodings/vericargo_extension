@@ -9,6 +9,22 @@ const CATEGORIES = [
   { id: "HUMAN_REVIEW", icon: "!", label: "Email Intent Uncertain", note: "Intent needs confirmation" },
 ];
 
+const DOCUMENT_WORKFLOW = {
+  MISSING_AMBIGUOUS: "MISSING_AMBIGUOUS_DOCUMENT",
+  READY: "READY_FOR_COMPARISON",
+  UNREADABLE_LOW_QUALITY: "UNREADABLE_LOW_QUALITY",
+};
+
+const COMPARISON_FIELDS = [
+  { id: "shipper", label: "Shipper" },
+  { id: "consignee", label: "Consignee" },
+  { id: "notifyParty", label: "Notify Party" },
+  { id: "portOfLoading", label: "Port of Loading" },
+  { id: "portOfDischarge", label: "Port of Discharge" },
+  { id: "containerCount", label: "Container Count" },
+  { id: "grossWeightKg", label: "Gross Weight (kg)" },
+];
+
 const attachmentCache = new Map();
 let activePreviewUrls = [];
 let previewRequestId = 0;
@@ -17,9 +33,11 @@ const state = {
   activeView: "summary",
   categoryFilter: "ALL",
   classification: { configured: false, error: "", loading: false, model: "", pipelineVersion: "", processed: 0, total: 0 },
+  comparisonSelectedId: null,
   connection: { connected: false, email: "", error: "", loading: false, status: "" },
   currentPage: 1,
   messages: [],
+  documents: { configured: false, error: "", loading: false, processed: 0, processorVersion: "", total: 0 },
   requestedCount: 0,
   searchQuery: "",
   selectedId: null,
@@ -38,6 +56,11 @@ const appTabs = document.querySelector(".app-tabs");
 const caseSearch = document.querySelector("#case-search");
 const categoryFilters = document.querySelector("#category-filters");
 const caseResultCount = document.querySelector("#case-result-count");
+const comparisonView = document.querySelector("#comparison-view");
+const comparisonList = document.querySelector("#comparison-list");
+const comparisonDetail = document.querySelector("#comparison-detail");
+const documentStatus = document.querySelector("#document-status");
+const documentWorkflowDashboard = document.querySelector("#document-workflow-dashboard");
 
 const h = (value) =>
   String(value ?? "")
@@ -78,11 +101,26 @@ function attachmentNameForSearch(attachment) {
 const filteredMessages = () => {
   const query = state.searchQuery.trim().toLocaleLowerCase();
   return state.messages.filter((message) => {
-    const categoryMatches = state.categoryFilter === "ALL" || categoryFor(message) === state.categoryFilter;
+    const isWorkflowFilter = Object.values(DOCUMENT_WORKFLOW).includes(state.categoryFilter);
+    const categoryMatches = state.categoryFilter === "ALL"
+      || (isWorkflowFilter
+        ? message.documentWorkflowStatus === state.categoryFilter
+        : categoryFor(message) === state.categoryFilter);
     const searchMatches = !query || searchableText(message).includes(query);
     return categoryMatches && searchMatches;
   });
 };
+
+const comparisonMessages = () => state.messages.filter(
+  (message) => message.documentWorkflowStatus === DOCUMENT_WORKFLOW.READY
+    && message.siDocument
+    && message.draftBlDocument,
+);
+
+const pendingDocumentMessages = () => state.messages.filter(
+  (message) => categoryFor(message) === "DOCUMENT_COMPARISON"
+    && message.documentProcessingVersion !== state.documents.processorVersion,
+);
 
 function normalizeCaseSelection() {
   const messages = filteredMessages();
@@ -139,6 +177,7 @@ function renderTabs() {
   }
   summaryView.hidden = state.activeView !== "summary";
   casesView.hidden = state.activeView !== "cases";
+  comparisonView.hidden = state.activeView !== "comparison";
 }
 
 function renderClassificationStatus() {
@@ -169,10 +208,17 @@ function renderCaseControls() {
     { id: "ALL", label: "All" },
     ...CATEGORIES.map(({ id, label }) => ({ id, label })),
     { id: "UNCLASSIFIED", label: "Awaiting AI" },
+    { id: DOCUMENT_WORKFLOW.MISSING_AMBIGUOUS, label: "Missing/Ambiguous Document" },
+    { id: DOCUMENT_WORKFLOW.UNREADABLE_LOW_QUALITY, label: "Unreadable/Low Quality" },
   ];
   const counts = Object.fromEntries(options.map(({ id }) => [id, 0]));
   counts.ALL = state.messages.length;
-  for (const message of state.messages) counts[categoryFor(message)] += 1;
+  for (const message of state.messages) {
+    counts[categoryFor(message)] += 1;
+    if (message.documentWorkflowStatus && counts[message.documentWorkflowStatus] !== undefined) {
+      counts[message.documentWorkflowStatus] += 1;
+    }
+  }
   categoryFilters.innerHTML = options.map((option) => `
     <button class="filter-chip ${state.categoryFilter === option.id ? "active" : ""}" data-filter-category="${option.id}" type="button">
       ${h(option.label)} <span>${counts[option.id]}</span>
@@ -202,6 +248,80 @@ function renderSummary() {
           <span class="category-copy"><strong>${h(category.label)}</strong><small>${h(category.note)}</small></span>
           <span class="category-count">${counts[category.id]}</span>
         </button>`).join("")}
+    </div>`;
+}
+
+function renderDocumentStatus() {
+  const documentCases = state.messages.filter((message) => categoryFor(message) === "DOCUMENT_COMPARISON");
+  const pending = pendingDocumentMessages().length;
+  if (!state.connection.connected) {
+    documentStatus.innerHTML = '<div><strong>SI/BL document processing</strong><p>Connect Gmail to process document-comparison cases.</p></div>';
+    return;
+  }
+  if (!state.documents.configured) {
+    documentStatus.innerHTML = '<div><strong>Document processing unavailable</strong><p>The Cloud Run document processor is not configured.</p></div>';
+    return;
+  }
+  if (state.documents.loading) {
+    documentStatus.innerHTML = `<div><strong>Processing SI and Draft BL documents…</strong><p>${h(`${state.documents.processed} of ${state.documents.total || documentCases.length} cases processed`)}</p></div><span class="status-pill running">Running</span>`;
+    return;
+  }
+  if (state.documents.error) {
+    documentStatus.innerHTML = `<div><strong>Document processing needs attention</strong><p>${h(state.documents.error)}</p></div><button class="classification-button" data-documents="start">Retry</button>`;
+    return;
+  }
+  documentStatus.innerHTML = pending
+    ? `<div><strong>${pending} document-comparison cases queued</strong><p>Automatic processing will identify SI and Draft BL files, parse machine-readable content or use Gemini OCR, then extract seven fields.</p></div><span class="status-pill pending">Automatic</span>`
+    : `<div><strong>Document processing complete</strong><p>${documentCases.length} document-comparison cases checked.</p></div><span class="status-pill complete">Complete</span>`;
+}
+
+function renderDocumentWorkflowDashboard() {
+  const missing = state.messages.filter(
+    (message) => message.documentWorkflowStatus === DOCUMENT_WORKFLOW.MISSING_AMBIGUOUS,
+  ).length;
+  const unreadable = state.messages.filter(
+    (message) => message.documentWorkflowStatus === DOCUMENT_WORKFLOW.UNREADABLE_LOW_QUALITY,
+  ).length;
+  const ready = comparisonMessages().length;
+  documentWorkflowDashboard.innerHTML = `
+    <div class="workflow-heading"><div><span class="eyebrow">Document workflow</span><h2>SI and Draft BL processing</h2><p>Review document exceptions or open completed seven-field extractions.</p></div><span class="summary-total">${ready} ready</span></div>
+    <div class="workflow-grid">
+      <button class="workflow-card" data-workflow-status="${DOCUMENT_WORKFLOW.MISSING_AMBIGUOUS}" type="button">
+        <span class="workflow-icon">!</span><span><strong>Human Review – Missing/Ambiguous Document</strong><small>SI or Draft BL could not be identified clearly</small></span><b>${missing}</b>
+      </button>
+      <button class="workflow-card" data-workflow-status="${DOCUMENT_WORKFLOW.UNREADABLE_LOW_QUALITY}" type="button">
+        <span class="workflow-icon">!</span><span><strong>Human Review – Unreadable/Low Quality</strong><small>Parser or Gemini OCR could not obtain reliable content</small></span><b>${unreadable}</b>
+      </button>
+    </div>`;
+}
+
+function renderComparison() {
+  const messages = comparisonMessages();
+  if (!messages.some((message) => message.id === state.comparisonSelectedId)) {
+    state.comparisonSelectedId = messages[0]?.id || null;
+  }
+  comparisonList.innerHTML = messages.length
+    ? `<div class="comparison-list-heading"><strong>Processed cases</strong><span>${messages.length}</span></div>${messages.map((message) => `
+        <button class="comparison-case ${message.id === state.comparisonSelectedId ? "active" : ""}" data-comparison-id="${h(message.id)}" type="button">
+          <strong>${h(message.subject)}</strong><span>${h(message.sender)} · ${h(displayTime(message))}</span>
+        </button>`).join("")}`
+    : '<div class="empty-list">No completed SI/BL extractions yet. Process document-comparison cases from Inbox Summary.</div>';
+
+  const message = messages.find((candidate) => candidate.id === state.comparisonSelectedId);
+  if (!message) {
+    comparisonDetail.innerHTML = '<div class="empty-state"><div class="empty-icon">&#8644;</div><h2>Select a processed case</h2><p>The seven extracted SI and Draft BL fields will appear here.</p></div>';
+    return;
+  }
+  const fieldCell = (field) => `<div class="comparison-value"><strong>${h(field?.rawValue || "Not found")}</strong>${field?.normalizedValue && field.normalizedValue !== field.rawValue ? `<span>Normalized: ${h(field.normalizedValue)}</span>` : ""}<small>${h(`${field?.confidence || 0}% · ${field?.page ? `Page ${field.page}` : "Location unavailable"}`)}</small><p>${h(field?.evidence || "No evidence snippet available.")}</p></div>`;
+  comparisonDetail.innerHTML = `
+    <div class="comparison-header"><span class="eyebrow">SI/BL document comparison</span><h1>${h(message.subject)}</h1><p>${h(message.senderAddress)} · ${h(displayTime(message))}</p></div>
+    <div class="document-pair">
+      <div><strong>Shipping Instruction</strong><span>${h(message.siDocument.filename)}</span><small>${h(message.siDocument.processingMethod)} · ${h(`${message.siDocument.qualityScore}% quality`)}</small></div>
+      <div><strong>Draft Bill of Lading</strong><span>${h(message.draftBlDocument.filename)}</span><small>${h(message.draftBlDocument.processingMethod)} · ${h(`${message.draftBlDocument.qualityScore}% quality`)}</small></div>
+    </div>
+    <div class="comparison-table" role="table" aria-label="Seven extracted SI and Draft BL fields">
+      <div class="comparison-row comparison-table-head" role="row"><div>Field</div><div>Shipping Instruction</div><div>Draft Bill of Lading</div></div>
+      ${COMPARISON_FIELDS.map(({ id, label }) => `<div class="comparison-row" role="row"><div class="comparison-field">${h(label)}</div>${fieldCell(message.siDocument.fields?.[id])}${fieldCell(message.draftBlDocument.fields?.[id])}</div>`).join("")}
     </div>`;
 }
 
@@ -254,6 +374,13 @@ function renderDetail() {
   const classificationInsight = category === "UNCLASSIFIED"
     ? '<div class="classification-insight pending"><div><strong>Awaiting AI classification</strong><span>Pending</span></div><p>This result will update automatically when its classification batch completes.</p></div>'
     : `<div class="classification-insight"><div><strong>${h(categoryLabel(category))}</strong><span>${h(`${message.confidence ?? 0}% confidence`)}</span></div><p>${h(message.classificationReason || "Classified by Gemini.")}</p>${message.attachmentAssisted ? '<small>Attachment-assisted classification</small>' : ""}</div>`;
+  const documentInsight = message.documentWorkflowStatus === DOCUMENT_WORKFLOW.MISSING_AMBIGUOUS
+    ? `<div class="document-insight review"><strong>Human Review – Missing/Ambiguous Document</strong><p>${h(message.documentReviewReason)}</p></div>`
+    : message.documentWorkflowStatus === DOCUMENT_WORKFLOW.UNREADABLE_LOW_QUALITY
+      ? `<div class="document-insight review"><strong>Human Review – Unreadable/Low Quality</strong><p>${h(message.documentReviewReason)}</p></div>`
+      : message.documentWorkflowStatus === DOCUMENT_WORKFLOW.READY
+        ? '<div class="document-insight ready"><strong>Seven fields extracted</strong><button data-open-comparison type="button">Open SI/BL Document Comparison</button></div>'
+        : "";
   const attachments = (message.attachments || []).map(attachmentDetails);
   const attachmentCards = attachments.length
     ? attachments.map((attachment, index) => `
@@ -271,6 +398,7 @@ function renderDetail() {
       <p>${h(message.senderAddress)} · ${h(displayTime(message))}</p>
     </div>
     ${classificationInsight}
+    ${documentInsight}
     <div class="detail-body">
       <section class="message-content"><h2>Email content</h2><p>${h(message.body)}</p></section>
       <section class="attachments-section"><div class="section-heading"><h2>Files</h2><span>${attachments.length}</span></div><div class="attachment-grid">${attachmentCards}</div></section>
@@ -342,10 +470,13 @@ function render() {
   renderTabs();
   renderClassificationStatus();
   renderSummary();
+  renderDocumentStatus();
+  renderDocumentWorkflowDashboard();
   renderCaseControls();
   renderInbox();
   renderPagination();
   renderDetail();
+  renderComparison();
 }
 
 async function loadMessages() {
@@ -361,6 +492,12 @@ async function loadClassificationStatus() {
   state.classification.configured = result.configured;
   state.classification.model = result.model || "";
   state.classification.pipelineVersion = result.pipelineVersion || "";
+}
+
+async function loadDocumentStatus() {
+  const result = await globalThis.VeriCargoCloud.documentStatus();
+  state.documents.configured = result.configured;
+  state.documents.processorVersion = result.processorVersion || "";
 }
 
 async function classifyInbox() {
@@ -394,6 +531,41 @@ async function classifyInbox() {
     state.classification.loading = false;
     render();
   }
+  if (!state.classification.error) void processDocuments();
+}
+
+async function processDocuments() {
+  if (!state.documents.configured || state.documents.loading || !pendingDocumentMessages().length) return;
+  state.documents.loading = true;
+  state.documents.error = "";
+  state.documents.processed = 0;
+  state.documents.total = state.messages.filter((message) => categoryFor(message) === "DOCUMENT_COMPARISON").length;
+  renderDocumentStatus();
+  try {
+    await globalThis.VeriCargoCloud.processDocumentsAll(({ processed, total, updates }) => {
+      const selectedBeforeUpdate = state.selectedId;
+      const updatesById = new Map((updates || []).map((update) => [update.id, update]));
+      state.messages = state.messages.map((message) => updatesById.has(message.id)
+        ? { ...message, ...updatesById.get(message.id) }
+        : message);
+      state.documents.processed = processed;
+      state.documents.total = total;
+      normalizeCaseSelection();
+      renderDocumentStatus();
+      renderDocumentWorkflowDashboard();
+      renderCaseControls();
+      renderInbox();
+      renderPagination();
+      renderComparison();
+      if (selectedBeforeUpdate !== state.selectedId || updatesById.has(state.selectedId)) renderDetail();
+    });
+    await loadMessages();
+  } catch (error) {
+    state.documents.error = error instanceof Error ? error.message : String(error);
+  } finally {
+    state.documents.loading = false;
+    render();
+  }
 }
 
 async function synchronize() {
@@ -407,9 +579,10 @@ async function synchronize() {
     renderConnection();
   });
   await loadMessages();
-  await loadClassificationStatus();
+  await Promise.all([loadClassificationStatus(), loadDocumentStatus()]);
   state.connection.loading = false;
   render();
+  void processDocuments();
 }
 
 async function completeConnection({ start }) {
@@ -434,7 +607,7 @@ async function completeConnection({ start }) {
         const connection = await globalThis.VeriCargoCloud.connection();
         state.connection.connected = true;
         state.connection.email = connection.email;
-        await Promise.all([loadMessages(), loadClassificationStatus()]);
+        await Promise.all([loadMessages(), loadClassificationStatus(), loadDocumentStatus()]);
       } catch {
         state.connection.connected = false;
       }
@@ -491,12 +664,41 @@ classificationStatus.addEventListener("click", async (event) => {
   if (event.target.closest('[data-classification="start"]')) await classifyInbox();
 });
 
+documentStatus.addEventListener("click", async (event) => {
+  if (event.target.closest('[data-documents="start"]')) await processDocuments();
+});
+
+documentWorkflowDashboard.addEventListener("click", (event) => {
+  const card = event.target.closest("[data-workflow-status]");
+  if (!card) return;
+  state.categoryFilter = card.dataset.workflowStatus;
+  state.searchQuery = "";
+  state.currentPage = 1;
+  normalizeCaseSelection();
+  state.activeView = "cases";
+  render();
+});
+
+comparisonList.addEventListener("click", (event) => {
+  const item = event.target.closest("[data-comparison-id]");
+  if (!item) return;
+  state.comparisonSelectedId = item.dataset.comparisonId;
+  renderComparison();
+});
+
 inbox.addEventListener("click", (event) => {
   const row = event.target.closest("[data-email-id]");
   if (!row) return;
   state.selectedId = row.dataset.emailId;
   renderInbox();
   renderDetail();
+});
+
+detail.addEventListener("click", (event) => {
+  if (!event.target.closest("[data-open-comparison]")) return;
+  state.comparisonSelectedId = state.selectedId;
+  state.activeView = "comparison";
+  render();
 });
 
 pagination.addEventListener("click", (event) => {
@@ -539,8 +741,10 @@ connectionStatus.addEventListener("click", async (event) => {
     state.connection = { connected: false, email: "", error: "", loading: false, status: "" };
     state.classification = { configured: false, error: "", loading: false, model: "", pipelineVersion: "", processed: 0, total: 0 };
     state.categoryFilter = "ALL";
+    state.comparisonSelectedId = null;
     state.currentPage = 1;
     state.messages = [];
+    state.documents = { configured: false, error: "", loading: false, processed: 0, processorVersion: "", total: 0 };
     state.requestedCount = 0;
     state.searchQuery = "";
     state.selectedId = null;
@@ -558,8 +762,9 @@ async function initialize() {
       const connection = await globalThis.VeriCargoCloud.connection();
       state.connection.connected = true;
       state.connection.email = connection.email;
-      await Promise.all([loadMessages(), loadClassificationStatus()]);
+      await Promise.all([loadMessages(), loadClassificationStatus(), loadDocumentStatus()]);
       render();
+      void processDocuments();
       return;
     }
     if (await globalThis.VeriCargoCloud.hasPendingConnection()) {

@@ -122,6 +122,54 @@ test("ambiguous email triggers a second multimodal pass with the requested attac
   assert.equal(result.updates[0].category, "NEW_SI");
 });
 
+test("attachment-assisted triage uses lightweight text before Gemini Vision", async () => {
+  const { firestore, writes } = makeFirestore([{
+    attachments: [{ attachmentId: "attachment-1", filename: "instructions.txt", mimeType: "text/plain", size: 200 }],
+    body: "Please see attached.",
+    id: "message-1",
+    subject: "Documents",
+  }]);
+  const requests = [];
+  const responses = [
+    geminiResponse({
+      attachmentIndexes: [0],
+      category: "HUMAN_REVIEW",
+      confidence: 50,
+      evidence: "Attachment required.",
+      evidenceSufficient: false,
+      reason: "Read the attachment.",
+    }),
+    geminiResponse({
+      category: "NEW_SI",
+      confidence: 98,
+      evidence: "Parsed attachment contains a new SI.",
+      evidenceSufficient: true,
+      reason: "New shipping instruction.",
+    }),
+  ];
+  const service = createClassificationService({
+    attachmentLoader: async () => ({
+      data: Buffer.from("Shipping instruction details ".repeat(10)).toString("base64url"),
+      filename: "instructions.txt",
+      mimeType: "text/plain",
+      size: 200,
+    }),
+    config: { geminiApiKey: "test-key", geminiModel: "gemini-test" },
+    fetchImpl: async (_url, options) => {
+      requests.push(JSON.parse(options.body));
+      return responses.shift();
+    },
+    firestore,
+  });
+
+  await service.classifyNextBatch("connection-1");
+
+  const secondPassParts = requests[1].contents[0].parts;
+  assert.match(secondPassParts[1].text, /Lightweight parser output/);
+  assert.equal(secondPassParts.some((part) => part.inlineData), false);
+  assert.equal(writes[0].value.attachmentEvidence[0].processingMethod, "LIGHTWEIGHT_TEXT");
+});
+
 test("insufficient evidence without a usable attachment is routed to Human Review", async () => {
   const { firestore, writes } = makeFirestore([{ body: "Maybe this is an SI.", id: "message-1", subject: "Question" }]);
   const service = createClassificationService({

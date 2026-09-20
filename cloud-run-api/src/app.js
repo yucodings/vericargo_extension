@@ -64,7 +64,7 @@ const readJson = async (request) => {
   }
 };
 
-export function createApp({ classificationService = null, oauthService = null, gmailService = null } = {}) {
+export function createApp({ classificationService = null, documentService = null, oauthService = null, gmailService = null } = {}) {
   return http.createServer(async (request, response) => {
     const url = new URL(request.url ?? "/", "http://localhost");
     const isApi = url.pathname.startsWith("/api/");
@@ -86,6 +86,7 @@ export function createApp({ classificationService = null, oauthService = null, g
           service: "vericargo-api",
           status: "ready",
           aiConfigured: Boolean(classificationService),
+          documentProcessingConfigured: Boolean(documentService),
           oauthConfigured: Boolean(oauthService && gmailService),
         });
         return;
@@ -181,6 +182,28 @@ export function createApp({ classificationService = null, oauthService = null, g
           return;
         }
         json(request, response, 200, await classificationService.classifyNextBatch(session.connectionId));
+        return;
+      }
+
+      if (request.method === "GET" && url.pathname === "/api/documents/status") {
+        await oauthService.authenticate(request.headers.authorization);
+        json(request, response, 200, {
+          configured: Boolean(documentService),
+          processorVersion: documentService?.processorVersion || null,
+        });
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/documents/process") {
+        const session = await oauthService.authenticate(request.headers.authorization);
+        if (!documentService) {
+          json(request, response, 503, {
+            code: "DOCUMENT_PROCESSING_NOT_CONFIGURED",
+            message: "Document processing is not configured yet.",
+          });
+          return;
+        }
+        json(request, response, 200, await documentService.processNextBatch(session.connectionId));
         return;
       }
 

@@ -54,16 +54,20 @@ const messageText = (message) => {
   return textParts.join("\n").slice(0, 20000);
 };
 
-const attachmentMetadata = (message) => {
+const attachmentMetadata = (message, { includeInlineData = false } = {}) => {
   const attachments = [];
   walkParts(message.payload, (part) => {
     if (part.filename) {
-      attachments.push({
+      const attachment = {
         attachmentId: part.body?.attachmentId || "",
         filename: part.filename,
         mimeType: part.mimeType || "application/octet-stream",
         size: Number(part.body?.size || 0),
-      });
+      };
+      if (includeInlineData && !attachment.attachmentId && part.body?.data) {
+        attachment.data = part.body.data;
+      }
+      attachments.push(attachment);
     }
   });
   return attachments;
@@ -166,9 +170,10 @@ export function createGmailService({ config, firestore, now = () => Date.now() }
       const { data, reference } = await connection(connectionId);
       const token = await accessToken(data);
       const message = await gmailRequest(`/messages/${encodeURIComponent(messageId)}?format=full`, token);
-      const attachments = attachmentMetadata(message);
-      await reference.collection("messages").doc(messageId).set({ attachments }, { merge: true });
-      return attachments;
+      const processingAttachments = attachmentMetadata(message, { includeInlineData: true });
+      const storedAttachments = processingAttachments.map(({ data: _data, ...attachment }) => attachment);
+      await reference.collection("messages").doc(messageId).set({ attachments: storedAttachments }, { merge: true });
+      return processingAttachments;
     },
 
     async getAttachment(connectionId, messageId, attachmentId) {

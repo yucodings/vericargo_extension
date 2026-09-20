@@ -13,12 +13,16 @@ No sample inbox, mock cases, direct Gmail API token handling, or Demo mode is in
 5. Pin the extension and open its side panel.
 6. Select **Connect Gmail** and complete Google authorization in the tab that opens.
 7. Return to the side panel. It imports the Inbox through Cloud Run in resumable batches.
+8. After email classification completes, document processing starts automatically. Results appear
+   progressively in the two green review queues or in **SI/BL Document Comparison**.
 
 ## Architecture
 
 - `manifest.json` permits access only to the VeriCargo Cloud Run origin.
-- `cloud-client.js` manages the Cloud Run connection attempt, extension session, synchronization, and message requests.
-- `sidepanel.js` renders Cloud Run-backed Inbox messages and connection state.
+- `cloud-client.js` manages the Cloud Run connection attempt, extension session, synchronization,
+  email classification, and progressive document-processing requests.
+- `sidepanel.js` renders Inbox Summary, My Cases, the two document-review queues, and the side-by-side
+  seven-field SI/BL comparison.
 - `service-worker.js` opens the side panel when the toolbar action is selected.
 
 Google OAuth credentials and Gmail refresh tokens are not stored in this extension. The OAuth client secret is mounted into Cloud Run from Secret Manager, and refresh tokens are encrypted before Firestore storage.

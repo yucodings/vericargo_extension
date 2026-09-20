@@ -4,11 +4,13 @@ import { loadConfig } from "./config.js";
 import { createGmailService } from "./gmail-service.js";
 import { createOAuthService } from "./oauth-service.js";
 import { createClassificationService } from "./classification-service.js";
+import { createDocumentService } from "./document-service.js";
 
 const port = Number.parseInt(process.env.PORT ?? "8080", 10);
 let oauthService = null;
 let gmailService = null;
 let classificationService = null;
+let documentService = null;
 
 try {
   const config = loadConfig();
@@ -17,6 +19,14 @@ try {
   gmailService = createGmailService({ config, firestore });
   if (config.geminiApiKey) {
     classificationService = createClassificationService({
+      attachmentLoader: (connectionId, messageId, attachmentId) =>
+        gmailService.getAttachment(connectionId, messageId, attachmentId),
+      attachmentMetadataLoader: (connectionId, messageId) =>
+        gmailService.getAttachmentMetadata(connectionId, messageId),
+      config,
+      firestore,
+    });
+    documentService = createDocumentService({
       attachmentLoader: (connectionId, messageId, attachmentId) =>
         gmailService.getAttachment(connectionId, messageId, attachmentId),
       attachmentMetadataLoader: (connectionId, messageId) =>
@@ -34,7 +44,7 @@ try {
   );
 }
 
-const server = createApp({ classificationService, gmailService, oauthService });
+const server = createApp({ classificationService, documentService, gmailService, oauthService });
 
 server.listen(port, "0.0.0.0", () => {
   console.log(JSON.stringify({ event: "server_started", port }));

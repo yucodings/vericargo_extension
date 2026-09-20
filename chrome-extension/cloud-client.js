@@ -97,6 +97,20 @@
     throw new Error("Email classification exceeded the supported batch count.");
   }
 
+  async function processDocumentsAll(onProgress) {
+    let processed = 0;
+    let targetTotal = null;
+    for (let batch = 0; batch < 1000; batch += 1) {
+      const result = await request("/api/documents/process", { method: "POST" });
+      processed += result.processed;
+      targetTotal ??= result.processed + result.remaining;
+      onProgress?.({ ...result, processed, total: targetTotal });
+      if (result.done) return { ...result, processed, total: targetTotal };
+      await sleep(300);
+    }
+    throw new Error("Document processing exceeded the supported batch count.");
+  }
+
   async function disconnect() {
     try {
       if (await stored(SESSION_KEY)) await request("/api/disconnect", { method: "POST" });
@@ -112,9 +126,11 @@
     classifyAll,
     connection: () => request("/api/connection"),
     disconnect,
+    documentStatus: () => request("/api/documents/status"),
     hasPendingConnection: async () => Boolean(await stored(POLL_KEY)),
     hasSession: async () => Boolean(await stored(SESSION_KEY)),
     messages: () => request("/api/messages"),
+    processDocumentsAll,
     startConnection,
     syncAll,
     waitForConnection,

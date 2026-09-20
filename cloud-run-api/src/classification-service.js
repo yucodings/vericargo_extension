@@ -1,3 +1,5 @@
+import { extractLightweightText, supportsLightweightDocument } from "./lightweight-parser.js";
+
 const GEMINI_API = "https://generativelanguage.googleapis.com/v1beta/models";
 const BATCH_SIZE = 5;
 const CONFIDENCE_THRESHOLD = 90;
@@ -25,13 +27,7 @@ const attachmentName = (attachment) =>
 const attachmentMimeType = (attachment) =>
   typeof attachment === "object" ? attachment?.mimeType || "application/octet-stream" : "application/octet-stream";
 
-const supportsAttachment = (attachment) => {
-  const mimeType = attachmentMimeType(attachment).toLowerCase();
-  return mimeType === "application/pdf"
-    || mimeType.startsWith("image/")
-    || mimeType.startsWith("text/")
-    || ["application/json", "application/xml", "application/csv"].includes(mimeType);
-};
+const supportsAttachment = (attachment) => supportsLightweightDocument(attachmentMimeType(attachment).toLowerCase());
 
 const attachmentList = (message) => (message.attachments || [])
   .map((attachment, index) => {
@@ -105,6 +101,8 @@ const parseResult = (payload) => {
 
 const toStandardBase64 = (value) =>
   String(value || "").replaceAll("-", "+").replaceAll("_", "/").padEnd(Math.ceil(String(value || "").length / 4) * 4, "=");
+
+const toBuffer = (value) => Buffer.from(toStandardBase64(value), "base64");
 
 const finalizeResult = (result, { attachmentAssisted = false, attachmentEvidence = [], unavailableReason = "" } = {}) => {
   const needsReview = !result.evidenceSufficient
@@ -193,22 +191,43 @@ export function createClassificationService({
     const candidates = requestedIndexes
       .map((index) => ({ attachment: attachments[index], index }))
       .filter(({ attachment }) => attachment && typeof attachment === "object")
-      .filter(({ attachment }) => attachment.attachmentId && supportsAttachment(attachment))
+      .filter(({ attachment }) => (attachment.attachmentId || attachment.data) && supportsAttachment(attachment))
       .filter(({ attachment }) => !attachment.size || Number(attachment.size) <= MAX_ATTACHMENT_BYTES)
       .slice(0, MAX_ATTACHMENTS);
     const loaded = [];
     let totalBytes = 0;
     for (const candidate of candidates) {
-      const payload = await attachmentLoader(connectionId, message.id, candidate.attachment.attachmentId);
-      const size = Number(payload.size || candidate.attachment.size || 0);
+      const payload = candidate.attachment.data
+        ? {
+            data: candidate.attachment.data,
+            filename: attachmentName(candidate.attachment),
+            mimeType: attachmentMimeType(candidate.attachment),
+            size: candidate.attachment.size,
+          }
+        : await attachmentLoader(connectionId, message.id, candidate.attachment.attachmentId);
+      const buffer = toBuffer(payload.data);
+      const size = Number(payload.size || candidate.attachment.size || buffer.length || 0);
       if (size > MAX_ATTACHMENT_BYTES || totalBytes + size > MAX_TOTAL_ATTACHMENT_BYTES) continue;
       totalBytes += size;
-      loaded.push({
-        data: toStandardBase64(payload.data),
-        filename: payload.filename || attachmentName(candidate.attachment),
-        index: candidate.index,
-        mimeType: payload.mimeType || attachmentMimeType(candidate.attachment),
-      });
+      const mimeType = payload.mimeType || attachmentMimeType(candidate.attachment);
+      const native = await extractLightweightText(buffer, mimeType);
+      if (native) {
+        loaded.push({
+          filename: payload.filename || attachmentName(candidate.attachment),
+          index: candidate.index,
+          mimeType,
+          processingMethod: native.method,
+          text: native.text,
+        });
+      } else if (mimeType === "application/pdf" || mimeType.startsWith("image/")) {
+        loaded.push({
+          data: toStandardBase64(payload.data),
+          filename: payload.filename || attachmentName(candidate.attachment),
+          index: candidate.index,
+          mimeType,
+          processingMethod: "GEMINI_VISION_OCR",
+        });
+      }
     }
     return loaded;
   }
@@ -230,13 +249,22 @@ export function createClassificationService({
 
     const parts = [{ text: promptFor(message, { attachmentPass: true, firstResult }) }];
     for (const attachment of loaded) {
-      parts.push({ text: `Attachment ${attachment.index}: ${attachment.filename}` });
-      parts.push({ inlineData: { data: attachment.data, mimeType: attachment.mimeType } });
+      if (attachment.text) {
+        parts.push({ text: `Attachment ${attachment.index}: ${attachment.filename}\nLightweight parser output:\n${attachment.text}` });
+      } else {
+        parts.push({ text: `Attachment ${attachment.index}: ${attachment.filename} (use Gemini Vision/OCR)` });
+        parts.push({ inlineData: { data: attachment.data, mimeType: attachment.mimeType } });
+      }
     }
     const secondResult = await callGemini(parts);
     return finalizeResult(secondResult, {
       attachmentAssisted: true,
-      attachmentEvidence: loaded.map(({ filename, index, mimeType }) => ({ filename, index, mimeType })),
+      attachmentEvidence: loaded.map(({ filename, index, mimeType, processingMethod }) => ({
+        filename,
+        index,
+        mimeType,
+        processingMethod,
+      })),
     });
   }
 
