@@ -28,6 +28,9 @@ const COMPARISON_FIELDS = [
 const attachmentCache = new Map();
 let activePreviewUrls = [];
 let previewRequestId = 0;
+let labelSyncPromise = null;
+let automaticPostProcessingPromise = null;
+let hostGmailTabId = null;
 
 const state = {
   activeView: "summary",
@@ -199,7 +202,7 @@ function renderClassificationStatus() {
   }
   const pending = state.messages.filter((message) => !isCurrentClassification(message)).length;
   classificationStatus.innerHTML = pending
-    ? `<div><strong>Ready to classify ${pending} messages</strong><p>${h(state.classification.model || "Gemini")} will assign one of six categories.</p></div><button class="classification-button" data-classification="start">Classify Inbox</button>`
+    ? `<div><strong>${pending} message${pending === 1 ? "" : "s"} queued for classification</strong><p>${h(state.classification.model || "Gemini")} will classify new Inbox mail automatically.</p></div><span class="status-pill pending">Automatic</span>`
     : `<div><strong>Inbox classification complete</strong><p>${state.shownCount} messages classified by ${h(state.classification.model || "Gemini")}.</p></div><span class="status-pill complete">Complete</span>`;
 }
 
@@ -220,7 +223,7 @@ function renderCaseControls() {
     }
   }
   categoryFilters.innerHTML = options.map((option) => `
-    <button class="filter-chip ${state.categoryFilter === option.id ? "active" : ""}" data-filter-category="${option.id}" type="button">
+    <button class="filter-chip ${["HUMAN_REVIEW", DOCUMENT_WORKFLOW.MISSING_AMBIGUOUS, DOCUMENT_WORKFLOW.UNREADABLE_LOW_QUALITY].includes(option.id) ? "alert-filter" : ""} ${state.categoryFilter === option.id ? "active" : ""}" data-filter-category="${option.id}" type="button">
       ${h(option.label)} <span>${counts[option.id]}</span>
     </button>`).join("");
   const results = filteredMessages();
@@ -373,7 +376,7 @@ function renderDetail() {
   const category = categoryFor(message);
   const classificationInsight = category === "UNCLASSIFIED"
     ? '<div class="classification-insight pending"><div><strong>Awaiting AI classification</strong><span>Pending</span></div><p>This result will update automatically when its classification batch completes.</p></div>'
-    : `<div class="classification-insight"><div><strong>${h(categoryLabel(category))}</strong><span>${h(`${message.confidence ?? 0}% confidence`)}</span></div><p>${h(message.classificationReason || "Classified by Gemini.")}</p>${message.attachmentAssisted ? '<small>Attachment-assisted classification</small>' : ""}</div>`;
+    : `<div class="classification-insight ${category === "HUMAN_REVIEW" ? "review" : ""}"><div><strong>${h(categoryLabel(category))}</strong><span>${h(`${message.confidence ?? 0}% confidence`)}</span></div><p>${h(message.classificationReason || "Classified by Gemini.")}</p>${message.attachmentAssisted ? '<small>Attachment-assisted classification</small>' : ""}</div>`;
   const documentInsight = message.documentWorkflowStatus === DOCUMENT_WORKFLOW.MISSING_AMBIGUOUS
     ? `<div class="document-insight review"><strong>Human Review – Missing/Ambiguous Document</strong><p>${h(message.documentReviewReason)}</p></div>`
     : message.documentWorkflowStatus === DOCUMENT_WORKFLOW.UNREADABLE_LOW_QUALITY
@@ -393,8 +396,7 @@ function renderDetail() {
     : '<div class="no-attachments">No attachments on this email.</div>';
   detail.innerHTML = `
     <div class="case-header">
-      <span class="eyebrow">${h(categoryLabel(category))}</span>
-      <h1>${h(message.subject)}</h1>
+      <div class="case-title-row"><div><span class="eyebrow">${h(categoryLabel(category))}</span><h1>${h(message.subject)}</h1></div><button class="view-gmail-button" data-view-gmail type="button">View Email in Gmail</button></div>
       <p>${h(message.senderAddress)} · ${h(displayTime(message))}</p>
     </div>
     ${classificationInsight}
@@ -500,12 +502,42 @@ async function loadDocumentStatus() {
   state.documents.processorVersion = result.processorVersion || "";
 }
 
-async function classifyInbox() {
+async function syncGmailCategoryLabels() {
+  if (!state.connection.connected) return;
+  if (labelSyncPromise) return labelSyncPromise;
+  labelSyncPromise = globalThis.VeriCargoCloud.syncCategoryLabels()
+    .catch((error) => {
+      state.connection.error = `Gmail labels could not be synchronized: ${error instanceof Error ? error.message : String(error)}`;
+      renderConnection();
+    })
+    .finally(() => {
+      labelSyncPromise = null;
+    });
+  return labelSyncPromise;
+}
+
+async function runAutomaticPostProcessing() {
+  if (automaticPostProcessingPromise) return automaticPostProcessingPromise;
+  automaticPostProcessingPromise = (async () => {
+    const pendingClassification = state.messages.some((message) => !isCurrentClassification(message));
+    if (pendingClassification && state.classification.configured) {
+      await classifyInbox({ runFollowUp: false });
+    }
+    if (state.classification.error) return;
+    await syncGmailCategoryLabels();
+    await processDocuments();
+  })().finally(() => {
+    automaticPostProcessingPromise = null;
+  });
+  return automaticPostProcessingPromise;
+}
+
+async function classifyInbox({ runFollowUp = true } = {}) {
   if (!state.classification.configured || state.classification.loading) return;
   state.classification.loading = true;
   state.classification.error = "";
   state.classification.processed = 0;
-  state.classification.total = state.messages.length;
+  state.classification.total = state.messages.filter((message) => !isCurrentClassification(message)).length;
   renderClassificationStatus();
   try {
     await globalThis.VeriCargoCloud.classifyAll(({ processed, total, updates }) => {
@@ -531,7 +563,7 @@ async function classifyInbox() {
     state.classification.loading = false;
     render();
   }
-  if (!state.classification.error) void processDocuments();
+  if (!state.classification.error && runFollowUp) void runAutomaticPostProcessing();
 }
 
 async function processDocuments() {
@@ -582,7 +614,7 @@ async function synchronize() {
   await Promise.all([loadClassificationStatus(), loadDocumentStatus()]);
   state.connection.loading = false;
   render();
-  void processDocuments();
+  void runAutomaticPostProcessing();
 }
 
 async function completeConnection({ start }) {
@@ -694,7 +726,28 @@ inbox.addEventListener("click", (event) => {
   renderDetail();
 });
 
-detail.addEventListener("click", (event) => {
+detail.addEventListener("click", async (event) => {
+  if (event.target.closest("[data-view-gmail]")) {
+    const message = state.messages.find((candidate) => candidate.id === state.selectedId);
+    if (message) {
+      const account = encodeURIComponent(state.connection.email);
+      const gmailMessageId = encodeURIComponent(message.id);
+      const url = `https://mail.google.com/mail/?authuser=${account}#all/${gmailMessageId}`;
+      if (hostGmailTabId === null) {
+        state.connection.error = "The original Gmail tab is no longer available. Reopen VeriCargo from Gmail.";
+        renderConnection();
+        return;
+      }
+      try {
+        await chrome.tabs.update(hostGmailTabId, { active: true, url });
+      } catch {
+        hostGmailTabId = null;
+        state.connection.error = "The original Gmail tab is no longer available. Reopen VeriCargo from Gmail.";
+        renderConnection();
+      }
+    }
+    return;
+  }
   if (!event.target.closest("[data-open-comparison]")) return;
   state.comparisonSelectedId = state.selectedId;
   state.activeView = "comparison";
@@ -756,6 +809,8 @@ connectionStatus.addEventListener("click", async (event) => {
 
 async function initialize() {
   await chrome.storage.local.remove(["blinkCases", "blinkGmailCases", "blinkGmailEmail", "blinkMode"]);
+  const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  hostGmailTabId = activeTab?.id ?? null;
   render();
   try {
     if (await globalThis.VeriCargoCloud.hasSession()) {
@@ -764,7 +819,7 @@ async function initialize() {
       state.connection.email = connection.email;
       await Promise.all([loadMessages(), loadClassificationStatus(), loadDocumentStatus()]);
       render();
-      void processDocuments();
+      void runAutomaticPostProcessing();
       return;
     }
     if (await globalThis.VeriCargoCloud.hasPendingConnection()) {

@@ -23,6 +23,16 @@ No sample inbox, mock cases, direct Gmail API token handling, or Demo mode is in
   email classification, and progressive document-processing requests.
 - `sidepanel.js` renders Inbox Summary, My Cases, the two document-review queues, and the side-by-side
   seven-field SI/BL comparison.
+- Human-review states use red alert styling. **View Email in Gmail** opens the selected message in
+  the original Gmail tab instead of creating a new tab.
+- Cloud Run automatically creates and applies top-level category labels such as
+  `Document Comparison` and `Email Intent Uncertain` after classification. The spam category uses
+  `Spam Email` because Gmail reserves the system label name `Spam`. It migrates the old
+  nested and `VeriCargo - <category>` labels, removes obsolete category labels, and retains the
+  Gmail `INBOX` label.
+- The My Cases email list stays in a fixed-height panel with its own scrollbar.
+- Refresh imports new Inbox messages and automatically runs classification, Gmail label syncing,
+  and document processing. Manual classification is only exposed as a retry after an AI error.
 - `service-worker.js` opens the side panel when the toolbar action is selected.
 
 Google OAuth credentials and Gmail refresh tokens are not stored in this extension. The OAuth client secret is mounted into Cloud Run from Secret Manager, and refresh tokens are encrypted before Firestore storage.

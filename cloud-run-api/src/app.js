@@ -146,6 +146,12 @@ export function createApp({ classificationService = null, documentService = null
         return;
       }
 
+      if (request.method === "POST" && url.pathname === "/api/labels/sync") {
+        const session = await oauthService.authenticate(request.headers.authorization);
+        json(request, response, 200, await gmailService.syncCategoryLabels(session.connectionId));
+        return;
+      }
+
       const attachmentRoute = url.pathname.match(/^\/api\/messages\/([^/]+)\/attachments\/([^/]+)$/);
       if (request.method === "GET" && attachmentRoute) {
         const session = await oauthService.authenticate(request.headers.authorization);

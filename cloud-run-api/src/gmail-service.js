@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { decryptSecret } from "./crypto-utils.js";
 
 const GMAIL_API = "https://gmail.googleapis.com/gmail/v1/users/me";
@@ -5,6 +7,31 @@ const GOOGLE_TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
 const BATCH_SIZE = 10;
 const GMAIL_CONCURRENCY = 2;
 const MAX_GMAIL_RETRIES = 5;
+const CATEGORY_LABEL_SYNC_VERSION = "vericargo-category-labels-v3-category-only";
+
+const CATEGORY_LABELS = {
+  DOCUMENT_COMPARISON: "Document Comparison",
+  NEW_SI: "New SI Requests",
+  INVOICE_QUERY: "Invoice Queries",
+  GENERAL: "General Messages",
+  SPAM: "Spam Email",
+  HUMAN_REVIEW: "Email Intent Uncertain",
+};
+
+const LEGACY_CATEGORY_LABELS = [
+  "VeriCargo/Document Comparison",
+  "VeriCargo/New SI Requests",
+  "VeriCargo/Invoice Queries",
+  "VeriCargo/General Messages",
+  "VeriCargo/Spam",
+  "VeriCargo/Email Intent Uncertain",
+  "VeriCargo - Document Comparison",
+  "VeriCargo - New SI Requests",
+  "VeriCargo - Invoice Queries",
+  "VeriCargo - General Messages",
+  "VeriCargo - Spam",
+  "VeriCargo - Email Intent Uncertain",
+];
 
 const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
@@ -97,8 +124,8 @@ const normalizeMessage = (message) => {
   };
 };
 
-async function jsonRequest(url, options, failureMessage) {
-  const response = await fetch(url, options);
+async function jsonRequest(fetchImpl, url, options, failureMessage) {
+  const response = await fetchImpl(url, options);
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
     const error = new Error(body.error_description || body.error?.message || failureMessage);
@@ -109,7 +136,7 @@ async function jsonRequest(url, options, failureMessage) {
   return body;
 }
 
-export function createGmailService({ config, firestore, now = () => Date.now() }) {
+export function createGmailService({ config, fetchImpl = fetch, firestore, now = () => Date.now() }) {
   const connections = firestore.collection("gmail_connections");
 
   async function connection(connectionId) {
@@ -126,6 +153,7 @@ export function createGmailService({ config, firestore, now = () => Date.now() }
   async function accessToken(connectionData) {
     const refreshToken = decryptSecret(connectionData.encryptedRefreshToken, config.encryptionKey);
     const token = await jsonRequest(
+      fetchImpl,
       GOOGLE_TOKEN_ENDPOINT,
       {
         body: new URLSearchParams({
@@ -142,12 +170,20 @@ export function createGmailService({ config, firestore, now = () => Date.now() }
     return token.access_token;
   }
 
-  const gmailRequest = async (path, token) => {
+  const gmailRequest = async (path, token, { body, method = "GET" } = {}) => {
     for (let attempt = 0; attempt <= MAX_GMAIL_RETRIES; attempt += 1) {
       try {
         return await jsonRequest(
+          fetchImpl,
           `${GMAIL_API}${path}`,
-          { headers: { Authorization: `Bearer ${token}` } },
+          {
+            body: body === undefined ? undefined : JSON.stringify(body),
+            headers: {
+              Authorization: `Bearer ${token}`,
+              ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+            },
+            method,
+          },
           "Gmail API request failed.",
         );
       } catch (error) {
@@ -166,6 +202,84 @@ export function createGmailService({ config, firestore, now = () => Date.now() }
   };
 
   return {
+    async syncCategoryLabels(connectionId) {
+      const { data, reference } = await connection(connectionId);
+      const snapshot = await reference.collection("messages").get();
+      const categorized = snapshot.docs
+        .map((document) => ({ id: document.id, ...document.data() }))
+        .filter((message) => CATEGORY_LABELS[message.category] && message.classificationSource === "GEMINI");
+      const fingerprint = createHash("sha256")
+        .update(categorized.map((message) => `${message.id}:${message.category}`).sort().join("\n"))
+        .digest("hex");
+      if (
+        data.gmailCategoryLabelSyncVersion === CATEGORY_LABEL_SYNC_VERSION
+        && data.gmailCategoryLabelFingerprint === fingerprint
+      ) {
+        return { applied: 0, labels: Object.keys(CATEGORY_LABELS).length, skipped: true };
+      }
+
+      const token = await accessToken(data);
+      const existing = await gmailRequest("/labels", token);
+      const labelsByName = new Map((existing.labels || []).map((label) => [label.name, label]));
+      for (const name of Object.values(CATEGORY_LABELS)) {
+        if (labelsByName.has(name)) continue;
+        const created = await gmailRequest("/labels", token, {
+          body: { labelListVisibility: "labelShow", messageListVisibility: "show", name },
+          method: "POST",
+        });
+        labelsByName.set(created.name, created);
+      }
+
+      const categoryLabelIds = Object.fromEntries(
+        Object.entries(CATEGORY_LABELS).map(([category, name]) => [category, labelsByName.get(name).id]),
+      );
+      const legacyLabelIds = LEGACY_CATEGORY_LABELS
+        .map((name) => labelsByName.get(name)?.id)
+        .filter(Boolean);
+      for (const category of Object.keys(CATEGORY_LABELS)) {
+        const ids = categorized.filter((message) => message.category === category).map((message) => message.id);
+        if (!ids.length) continue;
+        const removeLabelIds = Object.entries(categoryLabelIds)
+          .filter(([candidate]) => candidate !== category)
+          .map(([, id]) => id)
+          .concat(legacyLabelIds);
+        for (let offset = 0; offset < ids.length; offset += 1000) {
+          await gmailRequest("/messages/batchModify", token, {
+            body: {
+              addLabelIds: [categoryLabelIds[category]],
+              ids: ids.slice(offset, offset + 1000),
+              removeLabelIds,
+            },
+            method: "POST",
+          });
+        }
+      }
+      for (const labelId of legacyLabelIds) {
+        await gmailRequest(`/labels/${encodeURIComponent(labelId)}`, token, { method: "DELETE" });
+      }
+      const legacyParent = labelsByName.get("VeriCargo");
+      const hasUnrelatedLegacyChildren = [...labelsByName.keys()].some(
+        (name) => name.startsWith("VeriCargo/") && !LEGACY_CATEGORY_LABELS.includes(name),
+      );
+      if (
+        legacyParent
+        && data.gmailCategoryLabelSyncVersion === "vericargo-category-labels-v1"
+        && !hasUnrelatedLegacyChildren
+      ) {
+        await gmailRequest(`/labels/${encodeURIComponent(legacyParent.id)}`, token, { method: "DELETE" });
+      }
+      await reference.set({
+        gmailCategoryLabelFingerprint: fingerprint,
+        gmailCategoryLabelsSyncedAt: new Date(now()),
+        gmailCategoryLabelSyncVersion: CATEGORY_LABEL_SYNC_VERSION,
+      }, { merge: true });
+      return {
+        applied: categorized.length,
+        labels: Object.keys(CATEGORY_LABELS).length,
+        skipped: false,
+      };
+    },
+
     async getAttachmentMetadata(connectionId, messageId) {
       const { data, reference } = await connection(connectionId);
       const token = await accessToken(data);

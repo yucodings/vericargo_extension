@@ -50,4 +50,10 @@ The seven comparison fields are shipper, consignee, notify party, port of loadin
 discharge, container count, and gross weight in kilograms. Each field includes the raw value,
 normalized value, confidence, page/location, and evidence snippet for both documents.
 
+`POST /api/labels/sync` creates six top-level category labels (`Document Comparison`,
+`New SI Requests`, `Invoice Queries`, `General Messages`, `Spam Email`, and `Email Intent Uncertain`)
+and applies the appropriate label to every Gemini-classified Gmail message in bulk. It migrates
+both the legacy `VeriCargo/<category>` sublabels and `VeriCargo - <category>` labels, removes the
+obsolete category labels, and preserves `INBOX` and all unrelated Gmail labels.
+
 Never copy an OAuth client secret or downloaded `client_secret*.json` file into this directory.

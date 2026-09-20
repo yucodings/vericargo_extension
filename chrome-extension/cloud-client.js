@@ -131,6 +131,7 @@
     hasSession: async () => Boolean(await stored(SESSION_KEY)),
     messages: () => request("/api/messages"),
     processDocumentsAll,
+    syncCategoryLabels: () => request("/api/labels/sync", { method: "POST" }),
     startConnection,
     syncAll,
     waitForConnection,

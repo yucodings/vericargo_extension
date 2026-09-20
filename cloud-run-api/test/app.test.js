@@ -86,6 +86,10 @@ test("extension connection and message routes use backend sessions", async () =>
         shown: 1,
       };
     },
+    syncCategoryLabels: async (connectionId) => {
+      assert.equal(connectionId, "connection-1");
+      return { applied: 1, labels: 6, skipped: false };
+    },
   };
   const apiServer = createApp({ gmailService, oauthService });
   await new Promise((resolve) => apiServer.listen(0, "127.0.0.1", resolve));
@@ -117,6 +121,12 @@ test("extension connection and message routes use backend sessions", async () =>
       mimeType: "text/plain",
       size: 4,
     });
+
+    const labelsResponse = await fetch(`${apiBase}/api/labels/sync`, {
+      headers: { Authorization: "Bearer extension-session" },
+      method: "POST",
+    });
+    assert.deepEqual(await labelsResponse.json(), { applied: 1, labels: 6, skipped: false });
   } finally {
     await new Promise((resolve, reject) => {
       apiServer.close((error) => (error ? reject(error) : resolve()));
