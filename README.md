@@ -1,8 +1,8 @@
-# BLiNK Gmail Shipping Assistant
+# VeriCargo Gmail Shipping Assistant
 
-BLiNK is a Gmail-first prototype for triaging shipping emails and verifying Shipping Instructions (SI) against Draft Bills of Lading (Draft BL). The root experience is a three-pane Gmail work surface: inbox, email, and a contextual BLiNK assistant.
+VeriCargo is a Gmail-first prototype for triaging shipping emails and verifying Shipping Instructions (SI) against Draft Bills of Lading (Draft BL). The root experience is a three-pane Gmail work surface: inbox, email, and a contextual VeriCargo assistant.
 
-A locally loadable Chrome Manifest V3 side-panel extension is available in `chrome-extension/`. It can be installed with Chrome's **Load unpacked** developer workflow and does not require Chrome Web Store publication. It provides Demo mode plus an OAuth-configurable Working mode for read-only Gmail access.
+A locally loadable Chrome Manifest V3 side-panel extension is available in `chrome-extension/`. It can be installed with Chrome's **Load unpacked** developer workflow and does not require Chrome Web Store publication. It has no Demo mode or mock mailbox: users authorize Gmail through the VeriCargo Cloud Run backend, which imports Inbox messages and serves them to authenticated extension sessions.
 
 ## What the prototype covers
 

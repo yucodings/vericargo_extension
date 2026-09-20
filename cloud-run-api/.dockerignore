@@ -1,0 +1,7 @@
+.git
+.env*
+client_secret*.json
+*.apps.googleusercontent.com.json
+node_modules
+npm-debug.log*
+test

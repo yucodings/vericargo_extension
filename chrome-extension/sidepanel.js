@@ -1,351 +1,474 @@
-const FIELD_LABELS = {
-  shipper: "Shipper",
-  consignee: "Consignee",
-  notify_party: "Notify party",
-  port_of_loading: "Port of loading",
-  port_of_discharge: "Port of discharge",
-  container_count: "Container count",
-  gross_weight_kg: "Gross weight",
-};
+const PAGE_SIZE = 50;
 
-const baseFields = [
-  ["shipper", "Northstar Exports Sdn. Bhd.", "NORTHSTAR EXPORTS SDN BHD", "MATCH", 97],
-  ["consignee", "Harbor Retail Pte Ltd, Singapore", "HARBOR RETAIL PTE LTD SINGAPORE", "MATCH", 97],
-  ["notify_party", "Atlantic Brokers Ltd.", "ATLANTIC BROKERS LTD", "MATCH", 97],
-  ["port_of_loading", "Port Klang, Malaysia", "PORT KLANG MY", "MATCH", 97],
-  ["port_of_discharge", "Singapore", "Singapore Port", "MATCH", 97],
-  ["container_count", "3 x 40HC", "3 containers", "MATCH", 98],
-  ["gross_weight_kg", "22 MT", "22,000 KGS", "MATCH", 97],
+const CATEGORIES = [
+  { id: "DOCUMENT_COMPARISON", icon: "⇄", label: "Document Comparison", note: "SI and Draft BL verification" },
+  { id: "NEW_SI", icon: "+", label: "New SI Requests", note: "New shipping instructions" },
+  { id: "INVOICE_QUERY", icon: "$", label: "Invoice Queries", note: "Invoice and payment related" },
+  { id: "GENERAL", icon: "✉", label: "General Messages", note: "General operational messages" },
+  { id: "SPAM", icon: "×", label: "Spam", note: "Irrelevant or promotional" },
+  { id: "HUMAN_REVIEW", icon: "!", label: "Human Review", note: "Needs manual attention" },
 ];
 
-function fields(overrides = {}) {
-  return baseFields.map(([key, si, draft, comparison, confidence]) => {
-    const value = overrides[key] || {};
-    return { key, label: FIELD_LABELS[key], si, draft, comparison, confidence, ...value };
-  });
-}
-
-const seedCases = [
-  {
-    id: "email_001", sender: "Northstar Logistics", time: "10:24 AM",
-    subject: "Please verify Draft BL before release",
-    body: "Please compare the attached draft Bill of Lading with our final shipping instruction.",
-    category: "DOCUMENT_COMPARISON", status: "SUGGESTED", result: "MATCH", confidence: 96,
-    fields: fields(),
-  },
-  {
-    id: "email_002", sender: "Pacific Goods", time: "9:58 AM",
-    subject: "Draft BL check - container quantity",
-    body: "Please check the attached Draft BL against the final SI. The container quantity needs particular attention.",
-    category: "DOCUMENT_COMPARISON", status: "SUGGESTED", result: "MISMATCH", confidence: 98,
-    fields: fields({ container_count: { draft: "4 x 40HC", comparison: "MISMATCH", confidence: 98 } }),
-  },
-  {
-    id: "email_003", sender: "Meridian Trade", time: "9:35 AM",
-    subject: "Verify shipment weight on Draft BL",
-    body: "The SI uses metric tonnes while the carrier draft uses kilograms.",
-    category: "DOCUMENT_COMPARISON", status: "SUGGESTED", result: "MATCH", confidence: 97,
-    fields: fields(),
-  },
-  {
-    id: "email_004", sender: "Blue Harbor", time: "9:12 AM", subject: "Documents",
-    body: "Please take a look when you can.", category: "GENERAL", status: "HUMAN_REVIEW",
-    result: null, confidence: 64, reviewReason: "Unable to Determine Email Intent", fields: [],
-  },
-  {
-    id: "email_005", sender: "Atlas Marine", time: "8:44 AM",
-    subject: "Please compare attached shipment files", body: "Please verify the instruction against the carrier draft.",
-    category: "DOCUMENT_COMPARISON", status: "HUMAN_REVIEW", result: null, confidence: 88,
-    reviewReason: "Missing Required Document", fields: fields(),
-  },
-  {
-    id: "email_006", sender: "Kencana Exports", time: "Yesterday",
-    subject: "Shipping Instruction - BK-7824", body: "Attached is the new SI for booking BK-7824.",
-    category: "NEW_SI", status: "CLASSIFIED", result: null, confidence: 98, fields: [],
-  },
-];
+const attachmentCache = new Map();
+let activePreviewUrls = [];
+let previewRequestId = 0;
 
 const state = {
-  demoCases: structuredClone(seedCases),
-  gmailCases: [],
-  mode: "demo",
-  selectedId: "email_002",
-  filter: "ALL",
-  query: "",
-  tab: "comparison",
-  connection: { connected: false, loading: false, emailAddress: "", error: "" },
+  activeView: "summary",
+  classification: { configured: false, error: "", loading: false, model: "", processed: 0, total: 0 },
+  connection: { connected: false, email: "", error: "", loading: false, status: "" },
+  currentPage: 1,
+  messages: [],
+  requestedCount: 0,
+  selectedId: null,
+  shownCount: 0,
 };
+
 const inbox = document.querySelector("#inbox");
 const detail = document.querySelector("#detail");
-const search = document.querySelector("#search");
 const connectionStatus = document.querySelector("#connection-status");
-const localStore = globalThis.chrome?.storage?.local ?? {
-  get: async () => ({}),
-  set: async () => undefined,
-};
+const pagination = document.querySelector("#pagination");
+const classificationStatus = document.querySelector("#classification-status");
+const summaryDashboard = document.querySelector("#summary-dashboard");
+const summaryView = document.querySelector("#summary-view");
+const casesView = document.querySelector("#cases-view");
+const appTabs = document.querySelector(".app-tabs");
 
-function categoryLabel(category) {
-  return ({
-    DOCUMENT_COMPARISON: "Document Comparison",
-    NEW_SI: "New SI",
-    INVOICE_QUERY: "Invoice Query",
-    GENERAL: "General",
-    SPAM: "Spam",
-  })[category] || category;
-}
-
-function activeCases() {
-  return state.mode === "working" ? state.gmailCases : state.demoCases;
-}
-
-function h(value) {
-  return String(value ?? "")
+const h = (value) =>
+  String(value ?? "")
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
+
+const categoryLabel = (category) =>
+  category === "UNCLASSIFIED"
+    ? "Awaiting classification"
+    : CATEGORIES.find((candidate) => candidate.id === category)?.label || "Human Review";
+
+const categoryFor = (message) =>
+  message.classificationSource === "GEMINI" && CATEGORIES.some((category) => category.id === message.category)
+    ? message.category
+    : "UNCLASSIFIED";
+
+const displayTime = (message) => {
+  if (!message.internalDateMs) return "Gmail";
+  return new Date(message.internalDateMs).toLocaleString([], {
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    month: "short",
+  });
+};
+
+const attachmentDetails = (attachment) => {
+  if (typeof attachment === "string") return { attachmentId: "", filename: attachment, mimeType: "File", size: 0 };
+  return {
+    attachmentId: attachment?.attachmentId || "",
+    filename: attachment?.filename || "Unnamed attachment",
+    mimeType: attachment?.mimeType || "File",
+    size: Number(attachment?.size || 0),
+  };
+};
+
+const formatBytes = (bytes) => {
+  if (!bytes) return "Size unavailable";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+};
+
+function renderConnection() {
+  if (state.connection.loading) {
+    connectionStatus.innerHTML = `<div class="status-copy"><strong>${h(state.connection.status || "Connecting to Gmail…")}</strong><p>${h(state.connection.error || "Keep this window open while synchronization completes.")}</p></div><div class="connection-actions"><button class="connection-button" data-connection="restart">Cancel</button></div>`;
+    return;
+  }
+  if (state.connection.connected) {
+    connectionStatus.innerHTML = `<div class="status-copy"><strong>Signed in: ${h(state.connection.email)}</strong><p>${h(state.connection.error || `${state.requestedCount} requested · ${state.shownCount} shown`)}</p></div><div class="connection-actions"><button class="connection-button primary" data-connection="refresh">Refresh</button><button class="connection-button" data-connection="disconnect">Sign out</button></div>`;
+    return;
+  }
+  connectionStatus.innerHTML = `<div class="status-copy"><strong>Connect Gmail</strong><p>${h(state.connection.error || "Authorize once to import your Inbox through Cloud Run.")}</p></div><div class="connection-actions"><button class="connection-button primary" data-connection="connect">Connect</button></div>`;
 }
 
-function filteredCases() {
-  const query = state.query.toLowerCase();
-  return activeCases().filter((item) => {
-    const matchesQuery = `${item.sender} ${item.subject} ${item.body}`.toLowerCase().includes(query);
-    const matchesFilter = state.filter === "ALL"
-      || (state.filter === "HUMAN_REVIEW" && item.status === "HUMAN_REVIEW")
-      || item.category === state.filter;
-    return matchesQuery && matchesFilter;
-  });
+function renderTabs() {
+  for (const button of appTabs.querySelectorAll("[data-view]")) {
+    button.classList.toggle("active", button.dataset.view === state.activeView);
+    button.setAttribute("aria-selected", String(button.dataset.view === state.activeView));
+  }
+  summaryView.hidden = state.activeView !== "summary";
+  casesView.hidden = state.activeView !== "cases";
+}
+
+function renderClassificationStatus() {
+  if (!state.connection.connected) {
+    classificationStatus.innerHTML = '<div><strong>AI inbox classification</strong><p>Connect Gmail to classify your messages.</p></div>';
+    return;
+  }
+  if (!state.classification.configured) {
+    classificationStatus.innerHTML = '<div><strong>Google AI setup required</strong><p>Your messages are ready. Add the API key to Cloud Run to start classification.</p></div><span class="status-pill pending">Not configured</span>';
+    return;
+  }
+  if (state.classification.loading) {
+    classificationStatus.innerHTML = `<div><strong>Classifying Inbox…</strong><p>${h(`${state.classification.processed} of ${state.classification.total || state.shownCount} processed`)}</p></div><span class="status-pill running">Running</span>`;
+    return;
+  }
+  if (state.classification.error) {
+    classificationStatus.innerHTML = `<div><strong>Classification needs attention</strong><p>${h(state.classification.error)}</p></div><button class="classification-button" data-classification="start">Retry</button>`;
+    return;
+  }
+  const pending = state.messages.filter((message) => message.classificationSource !== "GEMINI").length;
+  classificationStatus.innerHTML = pending
+    ? `<div><strong>Ready to classify ${pending} messages</strong><p>${h(state.classification.model || "Gemini")} will assign one of six categories.</p></div><button class="classification-button" data-classification="start">Classify Inbox</button>`
+    : `<div><strong>Inbox classification complete</strong><p>${state.shownCount} messages classified by ${h(state.classification.model || "Gemini")}.</p></div><span class="status-pill complete">Complete</span>`;
+}
+
+function renderSummary() {
+  const counts = Object.fromEntries(CATEGORIES.map((category) => [category.id, 0]));
+  let awaitingClassification = 0;
+  for (const message of state.messages) {
+    const category = categoryFor(message);
+    if (category === "UNCLASSIFIED") awaitingClassification += 1;
+    else counts[category] += 1;
+  }
+  summaryDashboard.innerHTML = `
+    <div class="summary-heading">
+      <div><span class="eyebrow">Inbox overview</span><h1>${state.shownCount} messages</h1><p>Every imported email is included. Categories update after AI classification.</p></div>
+      <div class="summary-metrics"><span class="summary-total">${state.requestedCount} requested</span>${awaitingClassification ? `<span class="summary-total pending-total">${awaitingClassification} awaiting AI</span>` : ""}</div>
+    </div>
+    <div class="category-grid">
+      ${CATEGORIES.map((category) => `
+        <button class="category-card category-${category.id.toLowerCase()}" data-category="${category.id}" type="button">
+          <span class="category-icon">${category.icon}</span>
+          <span class="category-copy"><strong>${h(category.label)}</strong><small>${h(category.note)}</small></span>
+          <span class="category-count">${counts[category.id]}</span>
+        </button>`).join("")}
+    </div>`;
 }
 
 function renderInbox() {
-  const items = filteredCases();
-  inbox.innerHTML = items.length ? items.map((item) => `
-    <button class="mail-row ${item.id === state.selectedId ? "selected" : ""}" data-email-id="${h(item.id)}">
-      <span class="mail-line"><span class="sender">${h(item.sender)}</span><span class="time">${h(item.time)}</span></span>
-      <span class="subject">${h(item.subject)}</span>
-      <span class="preview">${h(item.body)}</span>
-      <span class="badges">
-        <span class="badge ${item.category === "DOCUMENT_COMPARISON" ? "compare" : "other"}">${h(categoryLabel(item.category))}</span>
-        ${item.status === "HUMAN_REVIEW" ? '<span class="badge review">Human Review</span>' : ""}
-      </span>
-    </button>
-  `).join("") : `<div class="empty-list">${state.mode === "working" ? "Connect Gmail or refresh to load matching emails." : "No matching demo emails."}</div>`;
-}
-
-function comparisonPanel(item) {
-  if (item.status === "HUMAN_REVIEW") {
-    const attachmentNote = item.attachments?.length
-      ? `<p>Attachments detected: ${item.attachments.map(h).join(", ")}</p>`
-      : "";
-    return `<div class="panel"><div class="result review"><strong>Human Review</strong><p>Reason: ${h(item.reviewReason)}</p>${attachmentNote}</div>${item.fields.length ? fieldList(item) : ""}</div>`;
+  if (!state.connection.connected) {
+    inbox.innerHTML = '<div class="empty-list">Connect Gmail to load your Inbox.</div>';
+    return;
   }
-  if (item.category !== "DOCUMENT_COMPARISON") {
-    return `<div class="panel"><div class="result match"><strong>${h(categoryLabel(item.category))}</strong><p>This email does not continue to SI versus Draft BL verification.</p></div></div>`;
+  const start = (state.currentPage - 1) * PAGE_SIZE;
+  const messages = state.messages.slice(start, start + PAGE_SIZE);
+  inbox.innerHTML = messages.length
+    ? messages.map((message) => {
+      const category = categoryFor(message);
+      return `
+        <button class="mail-row ${message.id === state.selectedId ? "selected" : ""}" data-email-id="${h(message.id)}">
+          <span class="mail-line"><span class="sender">${h(message.sender)}</span><span class="time">${h(displayTime(message))}</span></span>
+          <span class="subject">${h(message.subject)}</span>
+          <span class="preview">${h(message.snippet || message.body)}</span>
+          <span class="badges"><span class="badge badge-${category.toLowerCase()}">${h(categoryLabel(category))}</span></span>
+        </button>`;
+    }).join("")
+    : '<div class="empty-list">No Inbox messages have been imported yet.</div>';
+}
+
+function renderPagination() {
+  const total = state.messages.length;
+  if (!state.connection.connected || total <= PAGE_SIZE) {
+    pagination.replaceChildren();
+    return;
   }
-  const matched = item.fields.filter((field) => field.comparison === "MATCH").length;
-  const tone = item.result === "MISMATCH" ? "mismatch" : "match";
-  const resultTitle = item.status === "VERIFIED"
-    ? `Reviewer verified ${item.result.toLowerCase()}`
-    : `Suggested ${item.result.toLowerCase()} — ${item.confidence}%`;
-  const resultDetail = item.status === "VERIFIED"
-    ? "The local review record has been updated."
-    : "Review the evidence before confirming the final result.";
-  return `<div class="panel">
-    <div class="result ${tone}"><strong>${h(resultTitle)}</strong><p>${h(resultDetail)}</p></div>
-    <div class="progress-label"><span>Field agreement</span><span>${matched} / 7 fields</span></div>
-    <div class="progress"><span style="width:${(matched / 7) * 100}%"></span></div>
-    ${fieldList(item)}
-    <div class="actions"><button class="primary" data-action="verify">Verify result</button><button class="secondary" data-action="review">Human Review</button></div>
-  </div>`;
-}
-
-function fieldList(item) {
-  return `<div class="fields">${item.fields.map((field) => `
-    <div class="field ${field.comparison.toLowerCase()}">
-      <span class="field-icon">${field.comparison === "MATCH" ? "✓" : "×"}</span>
-      <span class="field-copy"><strong>${h(field.label)}</strong><span>SI: ${h(field.si)} · BL: ${h(field.draft)}</span></span>
-      <span class="confidence">${field.confidence}%</span>
-    </div>`).join("")}</div>`;
-}
-
-function evidencePanel(item) {
-  if (!item.fields.length) return '<div class="panel"><div class="empty-list">No SI versus Draft BL evidence for this category.</div></div>';
-  const field = item.fields.find((entry) => entry.comparison === "MISMATCH") || item.fields[0];
-  const normalize = (value) => field.key === "gross_weight_kg" ? "22000" : field.key === "container_count" ? value.match(/\d+/)?.[0] : value.toUpperCase().replace(/[^A-Z0-9]+/g, " ").trim();
-  return `<div class="panel">
-    <div class="evidence-card"><h3>Shipping Instruction · Page 2</h3><p>Shipping_Instruction.pdf</p><div class="quote">${h(field.si)}</div><div class="value-grid"><div><span>Raw</span><strong>${h(field.si)}</strong></div><div><span>Normalized</span><strong>${h(normalize(field.si))}</strong></div></div></div>
-    <div class="evidence-card"><h3>Draft Bill of Lading · Page 1</h3><p>Draft_BL.pdf</p><div class="quote">${h(field.label)}: ${h(field.draft)}</div><div class="value-grid"><div><span>Raw</span><strong>${h(field.draft)}</strong></div><div><span>Normalized</span><strong>${h(normalize(field.draft))}</strong></div></div></div>
-  </div>`;
-}
-
-function editorPanel(item) {
-  if (item.category !== "DOCUMENT_COMPARISON") return '<div class="panel"><div class="empty-list">Draft BL editing is available only for document-comparison emails.</div></div>';
-  const suggestions = item.fields.filter((field) => field.comparison === "MISMATCH" && !(item.ignored || []).includes(field.key));
-  if (!suggestions.length) return '<div class="panel"><div class="result match"><strong>No unresolved edit suggestions</strong><p>The latest Draft BL values match the SI.</p></div></div>';
-  return `<div class="panel">${suggestions.map((field) => `
-    <div class="suggestion"><h3>${h(field.label)}</h3><dl><dt>Current</dt><dd>${h(field.draft)}</dd><dt>SI</dt><dd>${h(field.si)}</dd></dl><div class="actions"><button class="primary" data-action="apply" data-field="${h(field.key)}">Apply</button><button class="secondary" data-action="ignore" data-field="${h(field.key)}">Ignore</button></div></div>
-  `).join("")}</div>`;
+  const totalPages = Math.ceil(total / PAGE_SIZE);
+  const start = (state.currentPage - 1) * PAGE_SIZE + 1;
+  const end = Math.min(state.currentPage * PAGE_SIZE, total);
+  pagination.innerHTML = `
+    <button class="pagination-button" data-page="previous" ${state.currentPage === 1 ? "disabled" : ""}>Previous</button>
+    <span class="pagination-info">${start}–${end} of ${total}</span>
+    <button class="pagination-button" data-page="next" ${state.currentPage === totalPages ? "disabled" : ""}>Next</button>`;
 }
 
 function renderDetail() {
-  const item = activeCases().find((candidate) => candidate.id === state.selectedId);
-  if (!item) {
+  previewRequestId += 1;
+  for (const url of activePreviewUrls) URL.revokeObjectURL(url);
+  activePreviewUrls = [];
+  const message = state.messages.find((candidate) => candidate.id === state.selectedId);
+  if (!message) {
     detail.replaceChildren(document.querySelector("#empty-state").content.cloneNode(true));
     return;
   }
-  const panel = state.tab === "evidence" ? evidencePanel(item) : state.tab === "editor" ? editorPanel(item) : comparisonPanel(item);
+  const category = categoryFor(message);
+  const attachments = (message.attachments || []).map(attachmentDetails);
+  const attachmentCards = attachments.length
+    ? attachments.map((attachment, index) => `
+        <article class="attachment-preview" data-attachment-index="${index}">
+          <div class="file-preview" data-preview><span>${attachment.mimeType.includes("pdf") ? "PDF" : "FILE"}</span></div>
+          <strong title="${h(attachment.filename)}">${h(attachment.filename)}</strong>
+          <small>${h(attachment.mimeType)} · ${h(formatBytes(attachment.size))}</small>
+          <p data-preview-status>${attachment.attachmentId ? "Loading secure preview…" : "Preview is unavailable for this attachment."}</p>
+        </article>`).join("")
+    : '<div class="no-attachments">No attachments on this email.</div>';
   detail.innerHTML = `
-    <div class="case-header"><span class="eyebrow">${h(categoryLabel(item.category))}</span><h1>${h(item.subject)}</h1><p>${h(item.sender)} · ${h(item.time)}<br>${h(item.body)}</p></div>
-    <div class="tabs" role="tablist">
-      <button class="tab ${state.tab === "comparison" ? "active" : ""}" data-tab="comparison">Comparison</button>
-      <button class="tab ${state.tab === "evidence" ? "active" : ""}" data-tab="evidence">Evidence</button>
-      <button class="tab ${state.tab === "editor" ? "active" : ""}" data-tab="editor">Draft BL</button>
-    </div>${panel}`;
+    <div class="case-header">
+      <span class="eyebrow">${h(categoryLabel(category))}</span>
+      <h1>${h(message.subject)}</h1>
+      <p>${h(message.senderAddress)} · ${h(displayTime(message))}</p>
+    </div>
+    <div class="detail-body">
+      <section class="message-content"><h2>Email content</h2><p>${h(message.body)}</p></section>
+      <section class="attachments-section"><div class="section-heading"><h2>Files</h2><span>${attachments.length}</span></div><div class="attachment-grid">${attachmentCards}</div></section>
+    </div>`;
+  void loadAttachmentPreviews(message, attachments, previewRequestId);
 }
 
-function renderConnection() {
-  const config = globalThis.BlinkGmail.configuration();
-  document.querySelectorAll(".mode-button").forEach((button) => {
-    button.classList.toggle("active", button.dataset.mode === state.mode);
+const decodeAttachment = (data) => {
+  const base64 = data.replaceAll("-", "+").replaceAll("_", "/").padEnd(Math.ceil(data.length / 4) * 4, "=");
+  const binary = atob(base64);
+  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+};
+
+async function loadAttachmentPreviews(message, attachments, requestId) {
+  await Promise.all(attachments.map(async (attachment, index) => {
+    if (!attachment.attachmentId) return;
+    const card = detail.querySelector(`[data-attachment-index="${index}"]`);
+    const preview = card?.querySelector("[data-preview]");
+    const status = card?.querySelector("[data-preview-status]");
+    if (!preview || !status) return;
+    try {
+      const cacheKey = `${message.id}:${attachment.attachmentId}`;
+      let payload = attachmentCache.get(cacheKey);
+      if (!payload) {
+        payload = await globalThis.VeriCargoCloud.attachment(message.id, attachment.attachmentId);
+        attachmentCache.set(cacheKey, payload);
+      }
+      if (requestId !== previewRequestId) return;
+      const bytes = decodeAttachment(payload.data);
+      const mimeType = payload.mimeType || attachment.mimeType;
+      if (mimeType.startsWith("text/")) {
+        const content = document.createElement("pre");
+        content.className = "text-preview";
+        content.textContent = new TextDecoder().decode(bytes).slice(0, 12000);
+        preview.replaceChildren(content);
+      } else {
+        const objectUrl = URL.createObjectURL(new Blob([bytes], { type: mimeType }));
+        activePreviewUrls.push(objectUrl);
+        if (mimeType.startsWith("image/")) {
+          const image = document.createElement("img");
+          image.alt = payload.filename || attachment.filename;
+          image.src = objectUrl;
+          preview.replaceChildren(image);
+        } else if (mimeType === "application/pdf") {
+          const frame = document.createElement("iframe");
+          frame.src = objectUrl;
+          frame.title = `Preview of ${payload.filename || attachment.filename}`;
+          preview.replaceChildren(frame);
+        } else {
+          const link = document.createElement("a");
+          link.href = objectUrl;
+          link.download = payload.filename || attachment.filename;
+          link.textContent = "Open file";
+          preview.replaceChildren(link);
+        }
+      }
+      status.textContent = "Loaded securely from Gmail.";
+    } catch (error) {
+      if (requestId !== previewRequestId) return;
+      status.textContent = error instanceof Error ? error.message : "Preview could not be loaded.";
+      preview.classList.add("preview-error");
+    }
+  }));
+}
+
+function render() {
+  renderConnection();
+  renderTabs();
+  renderClassificationStatus();
+  renderSummary();
+  renderInbox();
+  renderPagination();
+  renderDetail();
+}
+
+async function loadMessages() {
+  const result = await globalThis.VeriCargoCloud.messages();
+  state.messages = result.messages;
+  state.requestedCount = result.requested;
+  state.shownCount = result.shown;
+  state.currentPage = Math.min(state.currentPage, Math.max(1, Math.ceil(state.messages.length / PAGE_SIZE)));
+  state.selectedId = state.messages.some((message) => message.id === state.selectedId)
+    ? state.selectedId
+    : state.messages[0]?.id || null;
+}
+
+async function loadClassificationStatus() {
+  const result = await globalThis.VeriCargoCloud.classificationStatus();
+  state.classification.configured = result.configured;
+  state.classification.model = result.model || "";
+}
+
+async function classifyInbox() {
+  if (!state.classification.configured || state.classification.loading) return;
+  state.classification.loading = true;
+  state.classification.error = "";
+  state.classification.processed = 0;
+  state.classification.total = state.messages.length;
+  renderClassificationStatus();
+  try {
+    await globalThis.VeriCargoCloud.classifyAll(({ classified, total }) => {
+      state.classification.processed = classified;
+      state.classification.total = total;
+      renderClassificationStatus();
+    });
+    await loadMessages();
+  } catch (error) {
+    state.classification.error = error instanceof Error ? error.message : String(error);
+  } finally {
+    state.classification.loading = false;
+    render();
+  }
+}
+
+async function synchronize() {
+  state.connection.loading = true;
+  state.connection.status = "Synchronizing Inbox…";
+  renderConnection();
+  await globalThis.VeriCargoCloud.syncAll(({ requested, shown }) => {
+    state.requestedCount = requested;
+    state.shownCount = shown;
+    state.connection.status = `Synchronizing Inbox… ${shown} of ${requested} messages imported`;
+    renderConnection();
   });
-  if (state.mode === "demo") {
-    connectionStatus.innerHTML = "<strong>Demo data</strong><p>No account connection. All interactions stay in local Chrome storage.</p>";
-    return;
-  }
-  if (!config.configured) {
-    connectionStatus.innerHTML = '<strong>Gmail setup required</strong><p>Replace the OAuth client ID placeholder in <code>manifest.json</code>, then reload the extension.</p>';
-    return;
-  }
-  if (state.connection.loading) {
-    connectionStatus.innerHTML = "<strong>Connecting to Gmail…</strong><p>Waiting for Chrome and the Gmail API.</p>";
-    return;
-  }
-  const error = state.connection.error ? `<div class="connection-error">${h(state.connection.error)}</div>` : "";
-  if (state.connection.connected) {
-    connectionStatus.innerHTML = `<strong>Connected: ${h(state.connection.emailAddress)}</strong><p>Read-only Gmail access. ${state.gmailCases.length} matching messages loaded.</p><div class="connection-actions"><button class="connection-button primary" data-connection="refresh">Refresh</button><button class="connection-button" data-connection="disconnect">Disconnect</button></div>${error}`;
-    return;
-  }
-  connectionStatus.innerHTML = `<strong>Working mode</strong><p>Connect Gmail to load recent shipping-related messages with read-only access.</p><div class="connection-actions"><button class="connection-button primary" data-connection="connect">Connect Gmail</button></div>${error}`;
+  await loadMessages();
+  await loadClassificationStatus();
+  state.connection.loading = false;
+  render();
 }
 
-function render() { renderConnection(); renderInbox(); renderDetail(); }
-
-async function persist() {
-  const key = state.mode === "working" ? "blinkGmailCases" : "blinkCases";
-  await localStore.set({ [key]: activeCases() });
+async function completeConnection({ start }) {
+  state.connection.loading = true;
+  state.connection.error = "";
+  state.connection.status = start ? "Opening Google authorization…" : "Waiting for Google authorization…";
+  render();
+  try {
+    if (start) await globalThis.VeriCargoCloud.startConnection();
+    const result = await globalThis.VeriCargoCloud.waitForConnection(() => {
+      state.connection.status = "Waiting for Google authorization…";
+      renderConnection();
+    });
+    state.connection.connected = true;
+    state.connection.email = result.email;
+    await synchronize();
+  } catch (error) {
+    state.connection.loading = false;
+    state.connection.error = error instanceof Error ? error.message : String(error);
+    if (await globalThis.VeriCargoCloud.hasSession()) {
+      try {
+        const connection = await globalThis.VeriCargoCloud.connection();
+        state.connection.connected = true;
+        state.connection.email = connection.email;
+        await Promise.all([loadMessages(), loadClassificationStatus()]);
+      } catch {
+        state.connection.connected = false;
+      }
+    } else {
+      state.connection.connected = false;
+    }
+    render();
+  }
 }
+
+appTabs.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-view]");
+  if (!button) return;
+  state.activeView = button.dataset.view;
+  renderTabs();
+});
+
+summaryDashboard.addEventListener("click", (event) => {
+  const card = event.target.closest("[data-category]");
+  if (!card) return;
+  const index = state.messages.findIndex((message) => categoryFor(message) === card.dataset.category);
+  if (index >= 0) {
+    state.currentPage = Math.floor(index / PAGE_SIZE) + 1;
+    state.selectedId = state.messages[index].id;
+  }
+  state.activeView = "cases";
+  render();
+});
+
+classificationStatus.addEventListener("click", async (event) => {
+  if (event.target.closest('[data-classification="start"]')) await classifyInbox();
+});
 
 inbox.addEventListener("click", (event) => {
   const row = event.target.closest("[data-email-id]");
   if (!row) return;
   state.selectedId = row.dataset.emailId;
-  state.tab = "comparison";
-  render();
-});
-
-detail.addEventListener("click", async (event) => {
-  const tab = event.target.closest("[data-tab]");
-  if (tab) { state.tab = tab.dataset.tab; renderDetail(); return; }
-  const action = event.target.closest("[data-action]");
-  if (!action) return;
-  const item = activeCases().find((candidate) => candidate.id === state.selectedId);
-  if (!item) return;
-  if (action.dataset.action === "apply") {
-    const field = item.fields.find((candidate) => candidate.key === action.dataset.field);
-    field.draft = field.si;
-    field.comparison = "MATCH";
-    field.confidence = 99;
-    item.result = item.fields.some((candidate) => candidate.comparison === "MISMATCH") ? "MISMATCH" : "MATCH";
-    item.confidence = Math.min(...item.fields.map((candidate) => candidate.confidence));
-    state.tab = "comparison";
-  } else if (action.dataset.action === "ignore") {
-    item.ignored = [...new Set([...(item.ignored || []), action.dataset.field])];
-    await persist();
-    renderDetail();
-    return;
-  } else if (action.dataset.action === "review") {
-    item.status = "HUMAN_REVIEW";
-    item.reviewReason = "Reviewer Requested";
-  } else if (action.dataset.action === "verify") {
-    item.status = "VERIFIED";
-  }
-  await persist();
-  render();
-});
-
-document.querySelector(".filters").addEventListener("click", (event) => {
-  const button = event.target.closest("[data-filter]");
-  if (!button) return;
-  state.filter = button.dataset.filter;
-  document.querySelectorAll(".filter").forEach((entry) => entry.classList.toggle("active", entry === button));
   renderInbox();
+  renderDetail();
 });
 
-search.addEventListener("input", () => { state.query = search.value; renderInbox(); });
-
-async function syncGmail(interactive) {
-  state.connection.loading = true;
-  state.connection.error = "";
-  renderConnection();
-  try {
-    const result = await globalThis.BlinkGmail.loadMessages({ interactive });
-    state.gmailCases = result.cases;
-    state.connection.connected = true;
-    state.connection.emailAddress = result.emailAddress;
-    state.selectedId = state.gmailCases[0]?.id || null;
-    state.tab = "comparison";
-    await localStore.set({
-      blinkGmailCases: state.gmailCases,
-      blinkGmailEmail: result.emailAddress,
-    });
-  } catch (error) {
-    state.connection.connected = false;
-    if (interactive) state.connection.error = error instanceof Error ? error.message : String(error);
-  } finally {
-    state.connection.loading = false;
-    render();
-  }
-}
-
-document.querySelector(".mode-switch").addEventListener("click", async (event) => {
-  const button = event.target.closest("[data-mode]");
-  if (!button) return;
-  state.mode = button.dataset.mode;
-  state.filter = "ALL";
-  state.selectedId = activeCases()[0]?.id || null;
-  state.tab = "comparison";
-  await localStore.set({ blinkMode: state.mode });
-  render();
-  if (state.mode === "working" && !state.connection.connected && globalThis.BlinkGmail.configuration().configured) {
-    await syncGmail(false);
-  }
+pagination.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-page]");
+  if (!button || button.disabled) return;
+  const totalPages = Math.max(1, Math.ceil(state.messages.length / PAGE_SIZE));
+  state.currentPage = button.dataset.page === "next"
+    ? Math.min(totalPages, state.currentPage + 1)
+    : Math.max(1, state.currentPage - 1);
+  state.selectedId = state.messages[(state.currentPage - 1) * PAGE_SIZE]?.id || null;
+  renderInbox();
+  renderPagination();
+  renderDetail();
+  globalThis.scrollTo({ top: 0, behavior: "smooth" });
 });
 
 connectionStatus.addEventListener("click", async (event) => {
   const button = event.target.closest("[data-connection]");
   if (!button) return;
-  if (button.dataset.connection === "connect") await syncGmail(true);
-  if (button.dataset.connection === "refresh") await syncGmail(false);
+  if (button.dataset.connection === "restart") {
+    await globalThis.VeriCargoCloud.cancelPendingConnection();
+    globalThis.location.reload();
+    return;
+  }
+  if (state.connection.loading) return;
+  if (button.dataset.connection === "connect") await completeConnection({ start: true });
+  if (button.dataset.connection === "refresh") {
+    try {
+      state.connection.error = "";
+      await synchronize();
+    } catch (error) {
+      state.connection.loading = false;
+      state.connection.error = error instanceof Error ? error.message : String(error);
+      render();
+    }
+  }
   if (button.dataset.connection === "disconnect") {
-    await globalThis.BlinkGmail.disconnect();
-    state.gmailCases = [];
+    await globalThis.VeriCargoCloud.disconnect();
+    state.connection = { connected: false, email: "", error: "", loading: false, status: "" };
+    state.classification = { configured: false, error: "", loading: false, model: "", processed: 0, total: 0 };
+    state.currentPage = 1;
+    state.messages = [];
+    state.requestedCount = 0;
     state.selectedId = null;
-    state.connection = { connected: false, loading: false, emailAddress: "", error: "" };
-    await localStore.set({ blinkGmailCases: [], blinkGmailEmail: "" });
+    state.shownCount = 0;
+    state.activeView = "summary";
     render();
   }
 });
 
-localStore.get(["blinkCases", "blinkGmailCases", "blinkGmailEmail", "blinkMode"]).then((saved) => {
-  if (Array.isArray(saved.blinkCases) && saved.blinkCases.length) state.demoCases = saved.blinkCases;
-  if (Array.isArray(saved.blinkGmailCases)) state.gmailCases = saved.blinkGmailCases;
-  if (saved.blinkMode === "working") state.mode = "working";
-  if (saved.blinkGmailEmail && state.gmailCases.length) {
-    state.connection.connected = true;
-    state.connection.emailAddress = saved.blinkGmailEmail;
-  }
-  state.selectedId = activeCases()[0]?.id || null;
+async function initialize() {
+  await chrome.storage.local.remove(["blinkCases", "blinkGmailCases", "blinkGmailEmail", "blinkMode"]);
   render();
-  if (state.mode === "working" && globalThis.BlinkGmail.configuration().configured) syncGmail(false);
-});
+  try {
+    if (await globalThis.VeriCargoCloud.hasSession()) {
+      const connection = await globalThis.VeriCargoCloud.connection();
+      state.connection.connected = true;
+      state.connection.email = connection.email;
+      await Promise.all([loadMessages(), loadClassificationStatus()]);
+      render();
+      return;
+    }
+    if (await globalThis.VeriCargoCloud.hasPendingConnection()) {
+      await completeConnection({ start: false });
+    }
+  } catch (error) {
+    state.connection.error = error instanceof Error ? error.message : String(error);
+    render();
+  }
+}
+
+initialize();

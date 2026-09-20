@@ -3,52 +3,51 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>BLiNK</title>
+    <title>VeriCargo</title>
     <link rel="stylesheet" href="sidepanel.css" />
   </head>
   <body>
     <header class="topbar">
-      <div class="brand-mark" aria-hidden="true">✦</div>
+      <div class="brand-mark" aria-hidden="true">&#10022;</div>
       <div class="brand-copy">
-        <strong>BLiNK</strong>
-        <span>Gmail shipping assistant</span>
+        <strong>VeriCargo</strong>
+        <span>Shipping assistant</span>
       </div>
-      <span class="local-badge">Local</span>
+      <span class="local-badge">Cloud</span>
+      <div id="connection-status" class="connection-status"></div>
     </header>
 
+    <nav class="app-tabs" aria-label="VeriCargo views">
+      <button class="app-tab active" data-view="summary" type="button">Inbox Summary</button>
+      <button class="app-tab" data-view="cases" type="button">My Cases</button>
+    </nav>
+
     <main>
-      <section class="mode-card" aria-label="Extension mode">
-        <div class="mode-switch" role="group" aria-label="Choose data mode">
-          <button class="mode-button active" data-mode="demo">Demo mode</button>
-          <button class="mode-button" data-mode="working">Working mode</button>
-        </div>
-        <div id="connection-status" class="connection-status"></div>
+      <section id="summary-view" class="app-view" aria-label="Inbox summary">
+        <div id="classification-status" class="classification-status"></div>
+        <section id="summary-dashboard" class="summary-dashboard"></section>
       </section>
 
-      <label class="search-wrap">
-        <span class="sr-only">Search demo emails</span>
-        <input id="search" type="search" placeholder="Search shipping mail" autocomplete="off" />
-      </label>
-
-      <nav class="filters" aria-label="Email filters">
-        <button class="filter active" data-filter="ALL">All</button>
-        <button class="filter" data-filter="DOCUMENT_COMPARISON">Compare</button>
-        <button class="filter" data-filter="HUMAN_REVIEW">Human Review</button>
-      </nav>
-
-      <section id="inbox" class="inbox" aria-label="Shipping email inbox"></section>
-      <section id="detail" class="detail" aria-live="polite"></section>
+      <section id="cases-view" class="app-view" aria-label="My cases" hidden>
+        <div class="cases-layout">
+          <div class="case-list-column">
+            <section id="inbox" class="inbox" aria-label="Shipping email inbox"></section>
+            <nav id="pagination" class="pagination" aria-label="Email pages"></nav>
+          </div>
+          <section id="detail" class="detail" aria-live="polite"></section>
+        </div>
+      </section>
     </main>
 
     <template id="empty-state">
       <div class="empty-state">
-        <div class="empty-icon">✉</div>
+        <div class="empty-icon">&#9993;</div>
         <h2>Select an email</h2>
         <p>Open a case to view classification, comparison, and evidence.</p>
       </div>
     </template>
 
-    <script src="gmail-client.js"></script>
+    <script src="cloud-client.js"></script>
     <script src="sidepanel.js"></script>
   </body>
 </html>
