@@ -83,12 +83,16 @@
 
   async function classifyAll(onProgress) {
     let classified = 0;
+    let processed = 0;
+    let targetTotal = null;
     for (let batch = 0; batch < 1000; batch += 1) {
       const result = await request("/api/classify", { method: "POST" });
       classified += result.classified;
-      onProgress?.({ ...result, classified });
-      if (result.done) return { ...result, classified };
-      await sleep(800);
+      processed += result.processed;
+      targetTotal ??= result.processed + result.remaining;
+      onProgress?.({ ...result, classified, processed, total: targetTotal });
+      if (result.done) return { ...result, classified, processed, total: targetTotal };
+      await sleep(300);
     }
     throw new Error("Email classification exceeded the supported batch count.");
   }

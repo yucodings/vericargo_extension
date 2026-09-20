@@ -162,6 +162,15 @@ export function createGmailService({ config, firestore, now = () => Date.now() }
   };
 
   return {
+    async getAttachmentMetadata(connectionId, messageId) {
+      const { data, reference } = await connection(connectionId);
+      const token = await accessToken(data);
+      const message = await gmailRequest(`/messages/${encodeURIComponent(messageId)}?format=full`, token);
+      const attachments = attachmentMetadata(message);
+      await reference.collection("messages").doc(messageId).set({ attachments }, { merge: true });
+      return attachments;
+    },
+
     async getAttachment(connectionId, messageId, attachmentId) {
       const { data, reference } = await connection(connectionId);
       const messageSnapshot = await reference.collection("messages").doc(messageId).get();

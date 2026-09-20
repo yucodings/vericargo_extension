@@ -166,6 +166,7 @@ export function createApp({ classificationService = null, oauthService = null, g
         json(request, response, 200, {
           configured: Boolean(classificationService),
           model: classificationService?.model || null,
+          pipelineVersion: classificationService?.pipelineVersion || null,
         });
         return;
       }

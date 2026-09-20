@@ -16,7 +16,14 @@ try {
   oauthService = createOAuthService({ config, firestore });
   gmailService = createGmailService({ config, firestore });
   if (config.geminiApiKey) {
-    classificationService = createClassificationService({ config, firestore });
+    classificationService = createClassificationService({
+      attachmentLoader: (connectionId, messageId, attachmentId) =>
+        gmailService.getAttachment(connectionId, messageId, attachmentId),
+      attachmentMetadataLoader: (connectionId, messageId) =>
+        gmailService.getAttachmentMetadata(connectionId, messageId),
+      config,
+      firestore,
+    });
   }
 } catch (error) {
   console.error(

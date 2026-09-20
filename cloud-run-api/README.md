@@ -31,6 +31,8 @@ Optional AI classification configuration:
 
 The API key stays in Cloud Run. It is never shipped in the Chrome extension. The authenticated
 `POST /api/classify` endpoint processes Gmail messages in small batches and stores the category,
-confidence, short reason, model, and classification timestamp in Firestore.
+confidence, evidence, model, pipeline version, and classification timestamp in Firestore. The
+first pass uses email text and attachment metadata. Only when that evidence is insufficient does
+Cloud Run retrieve up to two supported Gmail attachments for a second Gemini multimodal pass.
 
 Never copy an OAuth client secret or downloaded `client_secret*.json` file into this directory.

@@ -29,6 +29,14 @@
       </section>
 
       <section id="cases-view" class="app-view" aria-label="My cases" hidden>
+        <div class="case-toolbar">
+          <label class="case-search">
+            <span aria-hidden="true">&#128269;</span>
+            <input id="case-search" type="search" placeholder="Search sender, subject, content or files" autocomplete="off" />
+          </label>
+          <div id="category-filters" class="category-filters" aria-label="Filter cases by category"></div>
+          <div id="case-result-count" class="case-result-count" aria-live="polite"></div>
+        </div>
         <div class="cases-layout">
           <div class="case-list-column">
             <section id="inbox" class="inbox" aria-label="Shipping email inbox"></section>

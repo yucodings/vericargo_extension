@@ -6,7 +6,7 @@ const CATEGORIES = [
   { id: "INVOICE_QUERY", icon: "$", label: "Invoice Queries", note: "Invoice and payment related" },
   { id: "GENERAL", icon: "✉", label: "General Messages", note: "General operational messages" },
   { id: "SPAM", icon: "×", label: "Spam", note: "Irrelevant or promotional" },
-  { id: "HUMAN_REVIEW", icon: "!", label: "Human Review", note: "Needs manual attention" },
+  { id: "HUMAN_REVIEW", icon: "!", label: "Email Intent Uncertain", note: "Intent needs confirmation" },
 ];
 
 const attachmentCache = new Map();
@@ -15,11 +15,13 @@ let previewRequestId = 0;
 
 const state = {
   activeView: "summary",
-  classification: { configured: false, error: "", loading: false, model: "", processed: 0, total: 0 },
+  categoryFilter: "ALL",
+  classification: { configured: false, error: "", loading: false, model: "", pipelineVersion: "", processed: 0, total: 0 },
   connection: { connected: false, email: "", error: "", loading: false, status: "" },
   currentPage: 1,
   messages: [],
   requestedCount: 0,
+  searchQuery: "",
   selectedId: null,
   shownCount: 0,
 };
@@ -33,6 +35,9 @@ const summaryDashboard = document.querySelector("#summary-dashboard");
 const summaryView = document.querySelector("#summary-view");
 const casesView = document.querySelector("#cases-view");
 const appTabs = document.querySelector(".app-tabs");
+const caseSearch = document.querySelector("#case-search");
+const categoryFilters = document.querySelector("#category-filters");
+const caseResultCount = document.querySelector("#case-result-count");
 
 const h = (value) =>
   String(value ?? "")
@@ -45,12 +50,48 @@ const h = (value) =>
 const categoryLabel = (category) =>
   category === "UNCLASSIFIED"
     ? "Awaiting classification"
-    : CATEGORIES.find((candidate) => candidate.id === category)?.label || "Human Review";
+    : CATEGORIES.find((candidate) => candidate.id === category)?.label || "Email Intent Uncertain";
+
+const isCurrentClassification = (message) =>
+  message.classificationSource === "GEMINI"
+  && message.classificationModel === state.classification.model
+  && message.classificationPipelineVersion === state.classification.pipelineVersion;
 
 const categoryFor = (message) =>
-  message.classificationSource === "GEMINI" && CATEGORIES.some((category) => category.id === message.category)
+  isCurrentClassification(message) && CATEGORIES.some((category) => category.id === message.category)
     ? message.category
     : "UNCLASSIFIED";
+
+const searchableText = (message) => [
+  message.sender,
+  message.senderAddress,
+  message.subject,
+  message.snippet,
+  message.body,
+  ...(message.attachments || []).map((attachment) => attachmentNameForSearch(attachment)),
+].join(" ").toLocaleLowerCase();
+
+function attachmentNameForSearch(attachment) {
+  return typeof attachment === "string" ? attachment : attachment?.filename || "";
+}
+
+const filteredMessages = () => {
+  const query = state.searchQuery.trim().toLocaleLowerCase();
+  return state.messages.filter((message) => {
+    const categoryMatches = state.categoryFilter === "ALL" || categoryFor(message) === state.categoryFilter;
+    const searchMatches = !query || searchableText(message).includes(query);
+    return categoryMatches && searchMatches;
+  });
+};
+
+function normalizeCaseSelection() {
+  const messages = filteredMessages();
+  const totalPages = Math.max(1, Math.ceil(messages.length / PAGE_SIZE));
+  state.currentPage = Math.min(Math.max(1, state.currentPage), totalPages);
+  if (!messages.some((message) => message.id === state.selectedId)) {
+    state.selectedId = messages[(state.currentPage - 1) * PAGE_SIZE]?.id || messages[0]?.id || null;
+  }
+}
 
 const displayTime = (message) => {
   if (!message.internalDateMs) return "Gmail";
@@ -117,10 +158,28 @@ function renderClassificationStatus() {
     classificationStatus.innerHTML = `<div><strong>Classification needs attention</strong><p>${h(state.classification.error)}</p></div><button class="classification-button" data-classification="start">Retry</button>`;
     return;
   }
-  const pending = state.messages.filter((message) => message.classificationSource !== "GEMINI").length;
+  const pending = state.messages.filter((message) => !isCurrentClassification(message)).length;
   classificationStatus.innerHTML = pending
     ? `<div><strong>Ready to classify ${pending} messages</strong><p>${h(state.classification.model || "Gemini")} will assign one of six categories.</p></div><button class="classification-button" data-classification="start">Classify Inbox</button>`
     : `<div><strong>Inbox classification complete</strong><p>${state.shownCount} messages classified by ${h(state.classification.model || "Gemini")}.</p></div><span class="status-pill complete">Complete</span>`;
+}
+
+function renderCaseControls() {
+  const options = [
+    { id: "ALL", label: "All" },
+    ...CATEGORIES.map(({ id, label }) => ({ id, label })),
+    { id: "UNCLASSIFIED", label: "Awaiting AI" },
+  ];
+  const counts = Object.fromEntries(options.map(({ id }) => [id, 0]));
+  counts.ALL = state.messages.length;
+  for (const message of state.messages) counts[categoryFor(message)] += 1;
+  categoryFilters.innerHTML = options.map((option) => `
+    <button class="filter-chip ${state.categoryFilter === option.id ? "active" : ""}" data-filter-category="${option.id}" type="button">
+      ${h(option.label)} <span>${counts[option.id]}</span>
+    </button>`).join("");
+  const results = filteredMessages();
+  caseResultCount.innerHTML = `<strong>${results.length}</strong> result${results.length === 1 ? "" : "s"}${state.categoryFilter !== "ALL" || state.searchQuery ? ' <button data-clear-filters type="button">Clear filters</button>' : ""}`;
+  if (caseSearch.value !== state.searchQuery) caseSearch.value = state.searchQuery;
 }
 
 function renderSummary() {
@@ -152,7 +211,7 @@ function renderInbox() {
     return;
   }
   const start = (state.currentPage - 1) * PAGE_SIZE;
-  const messages = state.messages.slice(start, start + PAGE_SIZE);
+  const messages = filteredMessages().slice(start, start + PAGE_SIZE);
   inbox.innerHTML = messages.length
     ? messages.map((message) => {
       const category = categoryFor(message);
@@ -164,11 +223,11 @@ function renderInbox() {
           <span class="badges"><span class="badge badge-${category.toLowerCase()}">${h(categoryLabel(category))}</span></span>
         </button>`;
     }).join("")
-    : '<div class="empty-list">No Inbox messages have been imported yet.</div>';
+    : '<div class="empty-list">No messages match the current filters.</div>';
 }
 
 function renderPagination() {
-  const total = state.messages.length;
+  const total = filteredMessages().length;
   if (!state.connection.connected || total <= PAGE_SIZE) {
     pagination.replaceChildren();
     return;
@@ -192,6 +251,9 @@ function renderDetail() {
     return;
   }
   const category = categoryFor(message);
+  const classificationInsight = category === "UNCLASSIFIED"
+    ? '<div class="classification-insight pending"><div><strong>Awaiting AI classification</strong><span>Pending</span></div><p>This result will update automatically when its classification batch completes.</p></div>'
+    : `<div class="classification-insight"><div><strong>${h(categoryLabel(category))}</strong><span>${h(`${message.confidence ?? 0}% confidence`)}</span></div><p>${h(message.classificationReason || "Classified by Gemini.")}</p>${message.attachmentAssisted ? '<small>Attachment-assisted classification</small>' : ""}</div>`;
   const attachments = (message.attachments || []).map(attachmentDetails);
   const attachmentCards = attachments.length
     ? attachments.map((attachment, index) => `
@@ -208,6 +270,7 @@ function renderDetail() {
       <h1>${h(message.subject)}</h1>
       <p>${h(message.senderAddress)} · ${h(displayTime(message))}</p>
     </div>
+    ${classificationInsight}
     <div class="detail-body">
       <section class="message-content"><h2>Email content</h2><p>${h(message.body)}</p></section>
       <section class="attachments-section"><div class="section-heading"><h2>Files</h2><span>${attachments.length}</span></div><div class="attachment-grid">${attachmentCards}</div></section>
@@ -274,10 +337,12 @@ async function loadAttachmentPreviews(message, attachments, requestId) {
 }
 
 function render() {
+  normalizeCaseSelection();
   renderConnection();
   renderTabs();
   renderClassificationStatus();
   renderSummary();
+  renderCaseControls();
   renderInbox();
   renderPagination();
   renderDetail();
@@ -288,16 +353,14 @@ async function loadMessages() {
   state.messages = result.messages;
   state.requestedCount = result.requested;
   state.shownCount = result.shown;
-  state.currentPage = Math.min(state.currentPage, Math.max(1, Math.ceil(state.messages.length / PAGE_SIZE)));
-  state.selectedId = state.messages.some((message) => message.id === state.selectedId)
-    ? state.selectedId
-    : state.messages[0]?.id || null;
+  normalizeCaseSelection();
 }
 
 async function loadClassificationStatus() {
   const result = await globalThis.VeriCargoCloud.classificationStatus();
   state.classification.configured = result.configured;
   state.classification.model = result.model || "";
+  state.classification.pipelineVersion = result.pipelineVersion || "";
 }
 
 async function classifyInbox() {
@@ -308,10 +371,21 @@ async function classifyInbox() {
   state.classification.total = state.messages.length;
   renderClassificationStatus();
   try {
-    await globalThis.VeriCargoCloud.classifyAll(({ classified, total }) => {
-      state.classification.processed = classified;
+    await globalThis.VeriCargoCloud.classifyAll(({ processed, total, updates }) => {
+      const updatesById = new Map((updates || []).map((update) => [update.id, update]));
+      state.messages = state.messages.map((message) => updatesById.has(message.id)
+        ? { ...message, ...updatesById.get(message.id) }
+        : message);
+      state.classification.processed = processed;
       state.classification.total = total;
+      const selectedBeforeUpdate = state.selectedId;
+      normalizeCaseSelection();
       renderClassificationStatus();
+      renderSummary();
+      renderCaseControls();
+      renderInbox();
+      renderPagination();
+      if (selectedBeforeUpdate !== state.selectedId || updatesById.has(state.selectedId)) renderDetail();
     });
     await loadMessages();
   } catch (error) {
@@ -381,13 +455,36 @@ appTabs.addEventListener("click", (event) => {
 summaryDashboard.addEventListener("click", (event) => {
   const card = event.target.closest("[data-category]");
   if (!card) return;
-  const index = state.messages.findIndex((message) => categoryFor(message) === card.dataset.category);
-  if (index >= 0) {
-    state.currentPage = Math.floor(index / PAGE_SIZE) + 1;
-    state.selectedId = state.messages[index].id;
-  }
+  state.categoryFilter = card.dataset.category;
+  state.searchQuery = "";
+  state.currentPage = 1;
+  normalizeCaseSelection();
   state.activeView = "cases";
   render();
+});
+
+caseSearch.addEventListener("input", () => {
+  state.searchQuery = caseSearch.value;
+  state.currentPage = 1;
+  normalizeCaseSelection();
+  renderCaseControls();
+  renderInbox();
+  renderPagination();
+  renderDetail();
+});
+
+casesView.addEventListener("click", (event) => {
+  const category = event.target.closest("[data-filter-category]");
+  const clear = event.target.closest("[data-clear-filters]");
+  if (!category && !clear) return;
+  state.categoryFilter = category?.dataset.filterCategory || "ALL";
+  if (clear) state.searchQuery = "";
+  state.currentPage = 1;
+  normalizeCaseSelection();
+  renderCaseControls();
+  renderInbox();
+  renderPagination();
+  renderDetail();
 });
 
 classificationStatus.addEventListener("click", async (event) => {
@@ -405,11 +502,12 @@ inbox.addEventListener("click", (event) => {
 pagination.addEventListener("click", (event) => {
   const button = event.target.closest("[data-page]");
   if (!button || button.disabled) return;
-  const totalPages = Math.max(1, Math.ceil(state.messages.length / PAGE_SIZE));
+  const messages = filteredMessages();
+  const totalPages = Math.max(1, Math.ceil(messages.length / PAGE_SIZE));
   state.currentPage = button.dataset.page === "next"
     ? Math.min(totalPages, state.currentPage + 1)
     : Math.max(1, state.currentPage - 1);
-  state.selectedId = state.messages[(state.currentPage - 1) * PAGE_SIZE]?.id || null;
+  state.selectedId = messages[(state.currentPage - 1) * PAGE_SIZE]?.id || null;
   renderInbox();
   renderPagination();
   renderDetail();
@@ -439,10 +537,12 @@ connectionStatus.addEventListener("click", async (event) => {
   if (button.dataset.connection === "disconnect") {
     await globalThis.VeriCargoCloud.disconnect();
     state.connection = { connected: false, email: "", error: "", loading: false, status: "" };
-    state.classification = { configured: false, error: "", loading: false, model: "", processed: 0, total: 0 };
+    state.classification = { configured: false, error: "", loading: false, model: "", pipelineVersion: "", processed: 0, total: 0 };
+    state.categoryFilter = "ALL";
     state.currentPage = 1;
     state.messages = [];
     state.requestedCount = 0;
+    state.searchQuery = "";
     state.selectedId = null;
     state.shownCount = 0;
     state.activeView = "summary";

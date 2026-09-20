@@ -133,6 +133,7 @@ test("classification routes expose setup status and process an authenticated bat
   };
   const classificationService = {
     model: "gemini-test",
+    pipelineVersion: "test-pipeline",
     classifyNextBatch: async (connectionId) => {
       assert.equal(connectionId, "connection-1");
       return { classified: 5, done: false, processed: 5, remaining: 10, total: 15 };
@@ -146,7 +147,11 @@ test("classification routes expose setup status and process an authenticated bat
   try {
     const headers = { Authorization: "Bearer extension-session" };
     const statusResponse = await fetch(`${apiBase}/api/classification`, { headers });
-    assert.deepEqual(await statusResponse.json(), { configured: true, model: "gemini-test" });
+    assert.deepEqual(await statusResponse.json(), {
+      configured: true,
+      model: "gemini-test",
+      pipelineVersion: "test-pipeline",
+    });
 
     const classifyResponse = await fetch(`${apiBase}/api/classify`, { headers, method: "POST" });
     assert.deepEqual(await classifyResponse.json(), {
