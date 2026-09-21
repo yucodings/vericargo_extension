@@ -8,11 +8,7 @@
   </head>
   <body>
     <header class="topbar">
-      <div class="brand-mark" aria-hidden="true">&#10022;</div>
-      <div class="brand-copy">
-        <strong>VeriCargo</strong>
-        <span>Shipping assistant</span>
-      </div>
+      <img class="brand-logo" src="assets/vericargo-full.png" alt="VeriCargo" />
       <span class="local-badge">Cloud</span>
       <div id="connection-status" class="connection-status"></div>
     </header>
@@ -21,6 +17,7 @@
       <button class="app-tab active" data-view="summary" type="button">Inbox Summary</button>
       <button class="app-tab" data-view="cases" type="button">My Cases</button>
       <button class="app-tab" data-view="comparison" type="button">SI/BL Document Comparison</button>
+      <button class="app-tab" data-view="human-review" type="button">Human Review</button>
     </nav>
 
     <main>
@@ -49,9 +46,23 @@
         </div>
       </section>
 
+      <section id="human-review-view" class="app-view" aria-label="Human review" hidden>
+        <div id="human-review-filters" class="human-review-filters" aria-label="Filter human review cases"></div>
+        <div class="human-review-layout">
+          <div class="human-review-list-column">
+            <section id="human-review-list" class="human-review-list" aria-label="Human review email list"></section>
+            <nav id="human-review-pagination" class="pagination" aria-label="Human review email pages"></nav>
+          </div>
+          <section id="human-review-detail" class="human-review-detail" aria-live="polite"></section>
+        </div>
+      </section>
+
       <section id="comparison-view" class="app-view" aria-label="SI and Draft BL document comparison" hidden>
         <div class="comparison-layout">
-          <aside id="comparison-list" class="comparison-list" aria-label="Processed document cases"></aside>
+          <div class="comparison-list-column">
+            <aside id="comparison-list" class="comparison-list" aria-label="Processed document cases"></aside>
+            <nav id="comparison-pagination" class="pagination" aria-label="Processed document case pages"></nav>
+          </div>
           <section id="comparison-detail" class="comparison-detail" aria-live="polite"></section>
         </div>
       </section>

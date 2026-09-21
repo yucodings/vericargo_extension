@@ -72,11 +72,36 @@ test("extension connection and message routes use backend sessions", async () =>
     }),
   };
   const gmailService = {
+    createHumanReviewDraft: async (connectionId, messageId, issueType, body) => {
+      assert.equal(connectionId, "connection-1");
+      assert.equal(messageId, "message-1");
+      assert.equal(issueType, "MISSING_AMBIGUOUS_DOCUMENT");
+      assert.equal(body, "Dear Sandra, please resend the SI.");
+      return { draftId: "review-draft-1", gmailUrl: "https://mail.google.com/review-draft" };
+    },
+    createBlDraft: async (connectionId, messageId, format, text) => {
+      assert.equal(connectionId, "connection-1");
+      assert.equal(messageId, "message-1");
+      assert.equal(format, "docx");
+      assert.equal(text, "Reviewed Draft BL");
+      return { draftId: "draft-1", filename: "Draft.docx", gmailUrl: "https://mail.google.com/draft" };
+    },
     getAttachment: async (connectionId, messageId, attachmentId) => {
       assert.equal(connectionId, "connection-1");
       assert.equal(messageId, "message-1");
       assert.equal(attachmentId, "attachment-1");
       return { data: "dGVzdA", filename: "SI.txt", mimeType: "text/plain", size: 4 };
+    },
+    getBlFile: async (connectionId, messageId, format, text) => {
+      assert.equal(connectionId, "connection-1");
+      assert.equal(messageId, "message-1");
+      if (text !== undefined) {
+        assert.equal(format, "txt");
+        assert.equal(text, "Reviewed Draft BL");
+        return { data: "UkVWSUVXRUQ=", filename: "Draft.txt", mimeType: "text/plain", size: 8 };
+      }
+      assert.equal(format, "pdf");
+      return { data: "JVBERg==", filename: "Draft.pdf", mimeType: "application/pdf", size: 4 };
     },
     listMessages: async (connectionId) => {
       assert.equal(connectionId, "connection-1");
@@ -85,6 +110,18 @@ test("extension connection and message routes use backend sessions", async () =>
         requested: 1,
         shown: 1,
       };
+    },
+    setComparisonReviewStatus: async (connectionId, messageId, status) => {
+      assert.equal(connectionId, "connection-1");
+      assert.equal(messageId, "message-1");
+      assert.equal(status, "COMPLETE");
+      return { messageId, reviewedAt: "2026-09-21T00:00:00.000Z", status };
+    },
+    setMessageCategory: async (connectionId, messageId, category) => {
+      assert.equal(connectionId, "connection-1");
+      assert.equal(messageId, "message-1");
+      assert.equal(category, "GENERAL");
+      return { message: { category, classificationSource: "MANUAL_REVIEW" }, messageId };
     },
     syncCategoryLabels: async (connectionId) => {
       assert.equal(connectionId, "connection-1");
@@ -122,6 +159,73 @@ test("extension connection and message routes use backend sessions", async () =>
       size: 4,
     });
 
+    const blFileResponse = await fetch(`${apiBase}/api/messages/message-1/bl-file?format=pdf`, {
+      headers: { Authorization: "Bearer extension-session" },
+    });
+    assert.deepEqual(await blFileResponse.json(), {
+      data: "JVBERg==",
+      filename: "Draft.pdf",
+      mimeType: "application/pdf",
+      size: 4,
+    });
+
+    const editedBlFileResponse = await fetch(`${apiBase}/api/messages/message-1/bl-file`, {
+      body: JSON.stringify({ format: "txt", text: "Reviewed Draft BL" }),
+      headers: { Authorization: "Bearer extension-session", "Content-Type": "application/json" },
+      method: "POST",
+    });
+    assert.deepEqual(await editedBlFileResponse.json(), {
+      data: "UkVWSUVXRUQ=",
+      filename: "Draft.txt",
+      mimeType: "text/plain",
+      size: 8,
+    });
+
+    const blDraftResponse = await fetch(`${apiBase}/api/messages/message-1/bl-draft`, {
+      body: JSON.stringify({ format: "docx", text: "Reviewed Draft BL" }),
+      headers: { Authorization: "Bearer extension-session", "Content-Type": "application/json" },
+      method: "POST",
+    });
+    assert.deepEqual(await blDraftResponse.json(), {
+      draftId: "draft-1",
+      filename: "Draft.docx",
+      gmailUrl: "https://mail.google.com/draft",
+    });
+
+    const reviewStatusResponse = await fetch(`${apiBase}/api/messages/message-1/review-status`, {
+      body: JSON.stringify({ status: "COMPLETE" }),
+      headers: { Authorization: "Bearer extension-session", "Content-Type": "application/json" },
+      method: "POST",
+    });
+    assert.deepEqual(await reviewStatusResponse.json(), {
+      messageId: "message-1",
+      reviewedAt: "2026-09-21T00:00:00.000Z",
+      status: "COMPLETE",
+    });
+
+    const categoryResponse = await fetch(`${apiBase}/api/messages/message-1/category`, {
+      body: JSON.stringify({ category: "GENERAL" }),
+      headers: { Authorization: "Bearer extension-session", "Content-Type": "application/json" },
+      method: "POST",
+    });
+    assert.deepEqual(await categoryResponse.json(), {
+      message: { category: "GENERAL", classificationSource: "MANUAL_REVIEW" },
+      messageId: "message-1",
+    });
+
+    const reviewDraftResponse = await fetch(`${apiBase}/api/messages/message-1/review-draft`, {
+      body: JSON.stringify({
+        body: "Dear Sandra, please resend the SI.",
+        issueType: "MISSING_AMBIGUOUS_DOCUMENT",
+      }),
+      headers: { Authorization: "Bearer extension-session", "Content-Type": "application/json" },
+      method: "POST",
+    });
+    assert.deepEqual(await reviewDraftResponse.json(), {
+      draftId: "review-draft-1",
+      gmailUrl: "https://mail.google.com/review-draft",
+    });
+
     const labelsResponse = await fetch(`${apiBase}/api/labels/sync`, {
       headers: { Authorization: "Bearer extension-session" },
       method: "POST",
@@ -144,6 +248,7 @@ test("classification routes expose setup status and process an authenticated bat
   const classificationService = {
     model: "gemini-test",
     pipelineVersion: "test-pipeline",
+    spamPolicyVersion: "test-spam-policy",
     classifyNextBatch: async (connectionId) => {
       assert.equal(connectionId, "connection-1");
       return { classified: 5, done: false, processed: 5, remaining: 10, total: 15 };
@@ -161,6 +266,7 @@ test("classification routes expose setup status and process an authenticated bat
       configured: true,
       model: "gemini-test",
       pipelineVersion: "test-pipeline",
+      spamPolicyVersion: "test-spam-policy",
     });
 
     const classifyResponse = await fetch(`${apiBase}/api/classify`, { headers, method: "POST" });

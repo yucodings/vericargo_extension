@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { CLASSIFICATION_PIPELINE_VERSION, createClassificationService } from "../src/classification-service.js";
+import {
+  CLASSIFICATION_PIPELINE_VERSION,
+  SPAM_POLICY_VERSION,
+  createClassificationService,
+} from "../src/classification-service.js";
 
 const makeFirestore = (messages) => {
   const writes = [];
@@ -35,6 +39,7 @@ const geminiResponse = (overrides = {}) => ({
       evidence: "The email asks to compare an SI with a Draft BL.",
       evidenceSufficient: true,
       reason: "The sender requests an SI and Draft BL comparison.",
+      spamEvidencePresent: false,
       ...overrides,
     }) }] } }],
   }),
@@ -204,5 +209,105 @@ test("Gemini authentication failures stop the batch without misclassifying email
   });
 
   await assert.rejects(() => service.classifyNextBatch("connection-1"), /API key is invalid/);
+  assert.equal(writes.length, 0);
+});
+
+test("Spam without concrete spam evidence is classified as General Message", async () => {
+  const { firestore, writes } = makeFirestore([{
+    body: "Please note our office will be closed on Monday.",
+    id: "message-1",
+    senderAddress: "partner@example.com",
+    subject: "Office closure notice",
+  }]);
+  const service = createClassificationService({
+    config: { geminiApiKey: "test-key", geminiModel: "gemini-test" },
+    fetchImpl: async () => geminiResponse({
+      category: "SPAM",
+      confidence: 96,
+      evidence: "The message does not discuss shipping.",
+      reason: "It is unrelated to shipping operations.",
+      spamEvidencePresent: false,
+    }),
+    firestore,
+  });
+
+  await service.classifyNextBatch("connection-1");
+
+  assert.equal(writes[0].value.category, "GENERAL");
+  assert.equal(writes[0].value.classificationSpamPolicyVersion, SPAM_POLICY_VERSION);
+  assert.match(writes[0].value.classificationReason, /No concrete spam evidence/i);
+});
+
+test("Spam with concrete spam evidence remains Spam", async () => {
+  const { firestore, writes } = makeFirestore([{
+    body: "Claim your guaranteed prize by sending your password now.",
+    id: "message-1",
+    subject: "You won a prize",
+  }]);
+  const service = createClassificationService({
+    config: { geminiApiKey: "test-key", geminiModel: "gemini-test" },
+    fetchImpl: async () => geminiResponse({
+      category: "SPAM",
+      confidence: 99,
+      evidence: "The sender requests a password to claim an unexpected prize.",
+      reason: "The message is a credential phishing scam.",
+      spamEvidencePresent: true,
+    }),
+    firestore,
+  });
+
+  await service.classifyNextBatch("connection-1");
+
+  assert.equal(writes[0].value.category, "SPAM");
+  assert.equal(writes[0].value.spamEvidencePresent, true);
+});
+
+test("only legacy Spam results are reconsidered for the new Spam policy", async () => {
+  const current = {
+    classificationModel: "gemini-test",
+    classificationPipelineVersion: CLASSIFICATION_PIPELINE_VERSION,
+    classificationSource: "GEMINI",
+  };
+  const { firestore, writes } = makeFirestore([
+    { ...current, category: "GENERAL", id: "general-message", subject: "General update" },
+    { ...current, category: "SPAM", id: "spam-message", subject: "Partner update" },
+  ]);
+  const service = createClassificationService({
+    config: { geminiApiKey: "test-key", geminiModel: "gemini-test" },
+    fetchImpl: async () => geminiResponse({
+      category: "GENERAL",
+      confidence: 98,
+      evidence: "This is a legitimate partner update.",
+      reason: "Ordinary business correspondence.",
+    }),
+    firestore,
+  });
+
+  const result = await service.classifyNextBatch("connection-1");
+
+  assert.equal(result.processed, 1);
+  assert.equal(result.updates[0].id, "spam-message");
+  assert.equal(writes.length, 1);
+});
+
+test("human-resolved categories are not overwritten by later Gemini batches", async () => {
+  const { firestore, writes } = makeFirestore([{
+    category: "GENERAL",
+    classificationSource: "MANUAL_REVIEW",
+    id: "reviewed-message",
+    subject: "Resolved operational update",
+  }]);
+  const service = createClassificationService({
+    config: { geminiApiKey: "test-key", geminiModel: "gemini-test" },
+    fetchImpl: async () => {
+      throw new Error("Gemini should not be called for a human-resolved message.");
+    },
+    firestore,
+  });
+
+  const result = await service.classifyNextBatch("connection-1");
+
+  assert.equal(result.processed, 0);
+  assert.equal(result.done, true);
   assert.equal(writes.length, 0);
 });

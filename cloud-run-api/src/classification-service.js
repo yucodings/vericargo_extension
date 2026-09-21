@@ -9,6 +9,7 @@ const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 const MAX_TOTAL_ATTACHMENT_BYTES = 18 * 1024 * 1024;
 
 export const CLASSIFICATION_PIPELINE_VERSION = "attachment-assisted-v1";
+export const SPAM_POLICY_VERSION = "conservative-spam-v1";
 
 export const EMAIL_CATEGORIES = [
   "DOCUMENT_COMPARISON",
@@ -42,9 +43,14 @@ Categories:
 - DOCUMENT_COMPARISON: asks to compare, check, verify, amend, or reconcile a Shipping Instruction (SI) with a Draft Bill of Lading (Draft BL/BL).
 - NEW_SI: submits or discusses a new Shipping Instruction, but does not request an SI-versus-Draft-BL comparison.
 - INVOICE_QUERY: invoice, payment, remittance, charge, billing, credit, or debit query.
-- GENERAL: legitimate operational or conversational email that does not match the categories above.
-- SPAM: unsolicited promotion, scam, irrelevant marketing, or junk.
+- GENERAL: legitimate business, operational, informational, automated, or conversational email that does not match the categories above. Use GENERAL for ordinary correspondence even when it is unrelated to shipping.
+- SPAM: clearly unsolicited bulk advertising, phishing, scams, deceptive solicitation, malware, or obvious junk. Do not use SPAM merely because an email is unrelated to shipping, automated, brief, from an unfamiliar sender, or does not fit another category.
 - HUMAN_REVIEW: intent is ambiguous, information is insufficient, mixed categories cannot be resolved, or a person must decide.
+
+Spam policy:
+- Classify as SPAM only when the email contains affirmative, concrete evidence of junk, unsolicited promotion, phishing, fraud, malware, or deceptive solicitation.
+- When that evidence is absent or uncertain, classify the message as GENERAL rather than SPAM.
+- Set spamEvidencePresent to true only for SPAM and cite the concrete indicator in evidence. Otherwise set it to false.
 
 ${attachmentPass
     ? "This is the attachment-assisted pass. Use the email and attached files together, and set evidenceSufficient to true only when the combined evidence clearly supports the category."
@@ -68,8 +74,9 @@ const responseSchema = {
     evidence: { type: "STRING" },
     evidenceSufficient: { type: "BOOLEAN" },
     reason: { type: "STRING" },
+    spamEvidencePresent: { type: "BOOLEAN" },
   },
-  required: ["attachmentIndexes", "category", "confidence", "evidence", "evidenceSufficient", "reason"],
+  required: ["attachmentIndexes", "category", "confidence", "evidence", "evidenceSufficient", "reason", "spamEvidencePresent"],
 };
 
 const parseResult = (payload) => {
@@ -96,6 +103,7 @@ const parseResult = (payload) => {
     evidence: String(result.evidence || "No evidence supplied."),
     evidenceSufficient: result.evidenceSufficient === true,
     reason: String(result.reason || "Classified by Gemini."),
+    spamEvidencePresent: result.spamEvidencePresent === true,
   };
 };
 
@@ -105,11 +113,17 @@ const toStandardBase64 = (value) =>
 const toBuffer = (value) => Buffer.from(toStandardBase64(value), "base64");
 
 const finalizeResult = (result, { attachmentAssisted = false, attachmentEvidence = [], unavailableReason = "" } = {}) => {
-  const needsReview = !result.evidenceSufficient
+  const spamDowngraded = result.category === "SPAM" && !result.spamEvidencePresent;
+  const resolvedCategory = spamDowngraded ? "GENERAL" : result.category;
+  const needsReview = !spamDowngraded && (
+    !result.evidenceSufficient
     || result.confidence < CONFIDENCE_THRESHOLD
-    || result.category === "HUMAN_REVIEW";
-  const reason = unavailableReason
-    || (result.confidence < CONFIDENCE_THRESHOLD
+    || resolvedCategory === "HUMAN_REVIEW"
+  );
+  const reason = spamDowngraded
+    ? "No concrete spam evidence was identified, so the message was classified as General Message."
+    : unavailableReason
+      || (result.confidence < CONFIDENCE_THRESHOLD
       ? `Low confidence (${result.confidence}%): ${result.reason}`
       : !result.evidenceSufficient
         ? `Insufficient evidence: ${result.reason}`
@@ -117,10 +131,11 @@ const finalizeResult = (result, { attachmentAssisted = false, attachmentEvidence
   return {
     attachmentAssisted,
     attachmentEvidence,
-    category: needsReview ? "HUMAN_REVIEW" : result.category,
+    category: needsReview ? "HUMAN_REVIEW" : resolvedCategory,
     confidence: result.confidence,
     evidence: result.evidence,
     reason,
+    spamEvidencePresent: result.spamEvidencePresent,
   };
 };
 
@@ -271,15 +286,18 @@ export function createClassificationService({
   return {
     model,
     pipelineVersion: CLASSIFICATION_PIPELINE_VERSION,
+    spamPolicyVersion: SPAM_POLICY_VERSION,
 
     async classifyNextBatch(connectionId) {
       const collection = firestore.collection("gmail_connections").doc(connectionId).collection("messages");
       const snapshot = await collection.orderBy("internalDateMs", "desc").get();
       const pending = snapshot.docs.filter((document) => {
         const message = document.data();
+        if (message.classificationSource === "MANUAL_REVIEW") return false;
         return message.classificationSource !== "GEMINI"
           || message.classificationModel !== model
-          || message.classificationPipelineVersion !== CLASSIFICATION_PIPELINE_VERSION;
+          || message.classificationPipelineVersion !== CLASSIFICATION_PIPELINE_VERSION
+          || (message.category === "SPAM" && message.classificationSpamPolicyVersion !== SPAM_POLICY_VERSION);
       });
       const selected = pending.slice(0, BATCH_SIZE);
       const updates = [];
@@ -299,9 +317,11 @@ export function createClassificationService({
             classificationPipelineVersion: CLASSIFICATION_PIPELINE_VERSION,
             classificationReason: result.reason,
             classificationSource: "GEMINI",
+            classificationSpamPolicyVersion: SPAM_POLICY_VERSION,
             classificationStatus: "CLASSIFIED",
             confidence: result.confidence,
             reviewReason: result.category === "HUMAN_REVIEW" ? result.reason : null,
+            spamEvidencePresent: result.spamEvidencePresent,
             status: result.category === "HUMAN_REVIEW" ? "HUMAN_REVIEW" : "CLASSIFIED",
           };
           await document.ref.set({ ...update, classifiedAt }, { merge: true });
@@ -319,6 +339,7 @@ export function createClassificationService({
             classificationPipelineVersion: CLASSIFICATION_PIPELINE_VERSION,
             classificationReason: error instanceof Error ? error.message : String(error),
             classificationSource: "GEMINI",
+            classificationSpamPolicyVersion: SPAM_POLICY_VERSION,
             classificationStatus: "FAILED",
             confidence: 0,
             reviewReason: "AI classification failed. A person must review this email.",

@@ -74,8 +74,8 @@
     for (let batch = 0; batch < 1000; batch += 1) {
       const result = await request("/api/sync", { method: "POST" });
       imported += result.imported;
-      onProgress?.({ imported, requested: result.requested, shown: result.shown });
-      if (result.done) return { imported, requested: result.requested, shown: result.shown };
+      onProgress?.({ imported, mode: result.mode, requested: result.requested, shown: result.shown });
+      if (result.done) return { imported, mode: result.mode, requested: result.requested, shown: result.shown };
       await sleep(1200);
     }
     throw new Error("Inbox synchronization exceeded the supported batch count.");
@@ -121,16 +121,36 @@
 
   globalThis.VeriCargoCloud = {
     attachment: (messageId, attachmentId) => request(`/api/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}`),
+    blFile: (messageId, format, text) => request(`/api/messages/${encodeURIComponent(messageId)}/bl-file`, {
+      body: { format, text },
+      method: "POST",
+    }),
     cancelPendingConnection,
     classificationStatus: () => request("/api/classification"),
     classifyAll,
     connection: () => request("/api/connection"),
+    createHumanReviewDraft: (messageId, issueType, body) => request(`/api/messages/${encodeURIComponent(messageId)}/review-draft`, {
+      body: { body, issueType },
+      method: "POST",
+    }),
     disconnect,
     documentStatus: () => request("/api/documents/status"),
     hasPendingConnection: async () => Boolean(await stored(POLL_KEY)),
     hasSession: async () => Boolean(await stored(SESSION_KEY)),
     messages: () => request("/api/messages"),
     processDocumentsAll,
+    createBlDraft: (messageId, format, text) => request(`/api/messages/${encodeURIComponent(messageId)}/bl-draft`, {
+      body: { format, text },
+      method: "POST",
+    }),
+    setComparisonReviewStatus: (messageId, status) => request(`/api/messages/${encodeURIComponent(messageId)}/review-status`, {
+      body: { status },
+      method: "POST",
+    }),
+    setMessageCategory: (messageId, category) => request(`/api/messages/${encodeURIComponent(messageId)}/category`, {
+      body: { category },
+      method: "POST",
+    }),
     syncCategoryLabels: () => request("/api/labels/sync", { method: "POST" }),
     startConnection,
     syncAll,

@@ -152,6 +152,94 @@ export function createApp({ classificationService = null, documentService = null
         return;
       }
 
+      const blFileRoute = url.pathname.match(/^\/api\/messages\/([^/]+)\/bl-file$/);
+      if ((request.method === "GET" || request.method === "POST") && blFileRoute) {
+        const session = await oauthService.authenticate(request.headers.authorization);
+        const body = request.method === "POST" ? await readJson(request) : {};
+        json(
+          request,
+          response,
+          200,
+          await gmailService.getBlFile(
+            session.connectionId,
+            decodeURIComponent(blFileRoute[1]),
+            body.format || url.searchParams.get("format") || "pdf",
+            body.text,
+          ),
+        );
+        return;
+      }
+
+      const blDraftRoute = url.pathname.match(/^\/api\/messages\/([^/]+)\/bl-draft$/);
+      if (request.method === "POST" && blDraftRoute) {
+        const session = await oauthService.authenticate(request.headers.authorization);
+        const body = await readJson(request);
+        json(
+          request,
+          response,
+          200,
+          await gmailService.createBlDraft(
+            session.connectionId,
+            decodeURIComponent(blDraftRoute[1]),
+            body.format || "pdf",
+            body.text,
+          ),
+        );
+        return;
+      }
+
+      const reviewStatusRoute = url.pathname.match(/^\/api\/messages\/([^/]+)\/review-status$/);
+      if (request.method === "POST" && reviewStatusRoute) {
+        const session = await oauthService.authenticate(request.headers.authorization);
+        const body = await readJson(request);
+        json(
+          request,
+          response,
+          200,
+          await gmailService.setComparisonReviewStatus(
+            session.connectionId,
+            decodeURIComponent(reviewStatusRoute[1]),
+            body.status,
+          ),
+        );
+        return;
+      }
+
+      const messageCategoryRoute = url.pathname.match(/^\/api\/messages\/([^/]+)\/category$/);
+      if (request.method === "POST" && messageCategoryRoute) {
+        const session = await oauthService.authenticate(request.headers.authorization);
+        const body = await readJson(request);
+        json(
+          request,
+          response,
+          200,
+          await gmailService.setMessageCategory(
+            session.connectionId,
+            decodeURIComponent(messageCategoryRoute[1]),
+            body.category,
+          ),
+        );
+        return;
+      }
+
+      const reviewDraftRoute = url.pathname.match(/^\/api\/messages\/([^/]+)\/review-draft$/);
+      if (request.method === "POST" && reviewDraftRoute) {
+        const session = await oauthService.authenticate(request.headers.authorization);
+        const body = await readJson(request);
+        json(
+          request,
+          response,
+          200,
+          await gmailService.createHumanReviewDraft(
+            session.connectionId,
+            decodeURIComponent(reviewDraftRoute[1]),
+            body.issueType,
+            body.body,
+          ),
+        );
+        return;
+      }
+
       const attachmentRoute = url.pathname.match(/^\/api\/messages\/([^/]+)\/attachments\/([^/]+)$/);
       if (request.method === "GET" && attachmentRoute) {
         const session = await oauthService.authenticate(request.headers.authorization);
@@ -174,6 +262,7 @@ export function createApp({ classificationService = null, documentService = null
           configured: Boolean(classificationService),
           model: classificationService?.model || null,
           pipelineVersion: classificationService?.pipelineVersion || null,
+          spamPolicyVersion: classificationService?.spamPolicyVersion || null,
         });
         return;
       }
