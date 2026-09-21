@@ -151,6 +151,9 @@
       body: { category },
       method: "POST",
     }),
+    revokeMessageCategory: (messageId) => request(`/api/messages/${encodeURIComponent(messageId)}/category/revoke`, {
+      method: "POST",
+    }),
     syncCategoryLabels: () => request("/api/labels/sync", { method: "POST" }),
     startConnection,
     syncAll,

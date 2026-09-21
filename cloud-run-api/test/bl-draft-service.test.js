@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { unzipSync } from "fflate";
 
-import { buildNormalizedBlContent, createBlDocument } from "../src/bl-draft-service.js";
+import { buildNormalizedBlContent, createBlDocument, findDraftContentIssues } from "../src/bl-draft-service.js";
 
 const message = {
   id: "message-1",
@@ -60,4 +60,26 @@ test("rejects unsupported BL download formats", () => {
 
 test("rejects empty reviewed content", () => {
   assert.throws(() => createBlDocument(message, "txt", "   "), /cannot be empty/);
+});
+
+test("detects and blocks gibberish before generating an attachment", () => {
+  const reviewed = `${buildNormalizedBlContent(message)}\n\nfdlsnhkfsdjfdsjfodishfosudhfosdh`;
+
+  assert.deepEqual(findDraftContentIssues(reviewed), [{
+    excerpt: "fdlsnhkfsdjfdsjfodishfosudhfosdh",
+    line: 17,
+    reason: "Unexpected content appears after the VeriCargo review footer.",
+  }]);
+  assert.throws(() => createBlDocument(message, "pdf", reviewed), /Possible gibberish detected on line 17/);
+});
+
+test("allows legitimate shipping names and identifiers", () => {
+  const reviewed = [
+    "Shipper: INTERNATIONAL FOREST PRODUCTS LLC",
+    "Port of Loading: NHAVA SHEVA, INDIA",
+    "Booking Reference: MSDUL0942520613",
+  ].join("\n");
+
+  assert.deepEqual(findDraftContentIssues(reviewed), []);
+  assert.doesNotThrow(() => createBlDocument(message, "txt", reviewed));
 });

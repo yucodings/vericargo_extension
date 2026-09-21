@@ -9,9 +9,8 @@ const GOOGLE_TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
 const BATCH_SIZE = 10;
 const GMAIL_CONCURRENCY = 2;
 const MAX_GMAIL_RETRIES = 5;
-const CATEGORY_LABEL_SYNC_VERSION = "vericargo-category-labels-v4-uniform-color";
+const CATEGORY_LABEL_SYNC_VERSION = "vericargo-category-labels-v5-category-colors";
 const INBOX_RECONCILIATION_VERSION = "vericargo-inbox-reconciliation-v1";
-const CATEGORY_LABEL_COLOR = Object.freeze({ backgroundColor: "#ff7537", textColor: "#ffffff" });
 
 const headerSafe = (value) => String(value || "").replace(/[\r\n]+/g, " ").trim();
 const encodedHeader = (value) => `=?UTF-8?B?${Buffer.from(headerSafe(value), "utf8").toString("base64")}?=`;
@@ -60,6 +59,39 @@ const CATEGORY_LABELS = {
   SPAM: "Spam Email",
   HUMAN_REVIEW: "Email Intent Uncertain",
 };
+
+// Gmail accepts only its predefined label palette. These are exact where available and
+// the closest supported Gmail shades for the requested blue, red, purple, and grey.
+const CATEGORY_LABEL_COLORS = Object.freeze({
+  DOCUMENT_COMPARISON: Object.freeze({ backgroundColor: "#ff7537", textColor: "#ffffff" }),
+  HUMAN_REVIEW: Object.freeze({ backgroundColor: "#285bac", textColor: "#ffffff" }),
+  GENERAL: Object.freeze({ backgroundColor: "#cc3a21", textColor: "#ffffff" }),
+  INVOICE_QUERY: Object.freeze({ backgroundColor: "#16a765", textColor: "#ffffff" }),
+  NEW_SI: Object.freeze({ backgroundColor: "#8e63ce", textColor: "#ffffff" }),
+  SPAM: Object.freeze({ backgroundColor: "#666666", textColor: "#ffffff" }),
+});
+
+const CATEGORY_UNDO_FIELDS = [
+  "attachmentAssisted",
+  "category",
+  "classificationModel",
+  "classificationPipelineVersion",
+  "classificationReason",
+  "classificationSource",
+  "classificationSpamPolicyVersion",
+  "classificationStatus",
+  "classifiedAt",
+  "confidence",
+  "humanReviewedAt",
+  "reviewReason",
+  "status",
+];
+
+const categoryUndoSnapshot = (message) => Object.fromEntries(
+  CATEGORY_UNDO_FIELDS
+    .filter((fieldName) => message[fieldName] !== undefined)
+    .map((fieldName) => [fieldName, message[fieldName]]),
+);
 
 const LEGACY_CATEGORY_LABELS = [
   "VeriCargo/Document Comparison",
@@ -369,6 +401,7 @@ export function createGmailService({ config, fetchImpl = fetch, firestore, now =
     }
 
     const messageIds = new Set();
+    const labelEvents = [];
     const addMessageIds = (entries, include = () => true) => {
       for (const entry of entries || []) {
         if (include(entry) && entry.message?.id) messageIds.add(entry.message.id);
@@ -381,6 +414,38 @@ export function createGmailService({ config, fetchImpl = fetch, firestore, now =
       addMessageIds(record.labelsAdded, (entry) => (
         (entry.labelIds || []).includes("INBOX") || (entry.labelIds || []).includes("TRASH")
       ));
+      for (const entry of record.labelsAdded || []) {
+        labelEvents.push({ labelIds: entry.labelIds || [], messageId: entry.message?.id, type: "ADDED" });
+      }
+      for (const entry of record.labelsRemoved || []) {
+        labelEvents.push({ labelIds: entry.labelIds || [], messageId: entry.message?.id, type: "REMOVED" });
+      }
+    }
+
+    const systemLabelIds = new Set([
+      "CHAT", "DRAFT", "IMPORTANT", "INBOX", "SENT", "SPAM", "STARRED", "TRASH", "UNREAD",
+      "CATEGORY_FORUMS", "CATEGORY_PERSONAL", "CATEGORY_PROMOTIONS", "CATEGORY_SOCIAL", "CATEGORY_UPDATES",
+    ]);
+    const hasCustomLabelChange = labelEvents.some(({ labelIds }) => (
+      labelIds.some((labelId) => !systemLabelIds.has(labelId))
+    ));
+    const categoryByLabelId = new Map();
+    if (hasCustomLabelChange) {
+      const gmailLabels = await gmailRequest("/labels", token);
+      const categoryByName = new Map(Object.entries(CATEGORY_LABELS).map(([category, name]) => [name, category]));
+      for (const label of gmailLabels.labels || []) {
+        const category = categoryByName.get(label.name);
+        if (category) categoryByLabelId.set(label.id, category);
+      }
+    }
+    const gmailCategoryChanges = new Map();
+    for (const event of labelEvents) {
+      const categories = event.labelIds.map((labelId) => categoryByLabelId.get(labelId)).filter(Boolean);
+      if (!event.messageId || !categories.length) continue;
+      messageIds.add(event.messageId);
+      const change = gmailCategoryChanges.get(event.messageId) || { lastAddedCategory: null };
+      if (event.type === "ADDED") change.lastAddedCategory = categories.at(-1);
+      gmailCategoryChanges.set(event.messageId, change);
     }
     const fetched = await mapWithConcurrency(
       [...messageIds],
@@ -411,7 +476,41 @@ export function createGmailService({ config, fetchImpl = fetch, firestore, now =
       if (!inboxMessageIds.has(messageId)) batch.delete(reference.collection("messages").doc(messageId));
     }
     for (const message of inboxMessages) {
-      batch.set(reference.collection("messages").doc(message.id), normalizeMessage(message), { merge: true });
+      const messageReference = reference.collection("messages").doc(message.id);
+      let update = normalizeMessage(message);
+      const gmailChange = gmailCategoryChanges.get(message.id);
+      if (gmailChange) {
+        const activeCategories = (message.labelIds || [])
+          .map((labelId) => categoryByLabelId.get(labelId))
+          .filter(Boolean);
+        const resolvedCategory = activeCategories.includes(gmailChange.lastAddedCategory)
+          ? gmailChange.lastAddedCategory
+          : activeCategories.length === 1
+            ? activeCategories[0]
+            : null;
+        if (resolvedCategory) {
+          const storedSnapshot = await messageReference.get();
+          const storedMessage = storedSnapshot.exists ? storedSnapshot.data() : {};
+          if (storedMessage.category !== resolvedCategory) {
+            const changedAt = new Date(now());
+            update = {
+              ...update,
+              category: resolvedCategory,
+              classificationReason: `Updated from the Gmail label ${CATEGORY_LABELS[resolvedCategory]}.`,
+              classificationSource: "MANUAL_REVIEW",
+              classificationStatus: "CLASSIFIED",
+              confidence: 100,
+              humanReviewedAt: changedAt,
+              manualCategoryChangeSource: "GMAIL",
+              manualCategoryChangedAt: changedAt,
+              manualCategoryUndo: categoryUndoSnapshot(storedMessage),
+              reviewReason: resolvedCategory === "HUMAN_REVIEW" ? "Intent needs confirmation." : null,
+              status: "CLASSIFIED",
+            };
+          }
+        }
+      }
+      batch.set(messageReference, update, { merge: true });
     }
     batch.set(
       reference,
@@ -463,11 +562,11 @@ export function createGmailService({ config, fetchImpl = fetch, firestore, now =
       const token = await accessToken(data);
       const existing = await gmailRequest("/labels", token);
       const labelsByName = new Map((existing.labels || []).map((label) => [label.name, label]));
-      for (const name of Object.values(CATEGORY_LABELS)) {
+      for (const [category, name] of Object.entries(CATEGORY_LABELS)) {
         if (labelsByName.has(name)) continue;
         const created = await gmailRequest("/labels", token, {
           body: {
-            color: CATEGORY_LABEL_COLOR,
+            color: CATEGORY_LABEL_COLORS[category],
             labelListVisibility: "labelShow",
             messageListVisibility: "show",
             name,
@@ -477,10 +576,10 @@ export function createGmailService({ config, fetchImpl = fetch, firestore, now =
         labelsByName.set(created.name, created);
       }
 
-      for (const name of Object.values(CATEGORY_LABELS)) {
+      for (const [category, name] of Object.entries(CATEGORY_LABELS)) {
         const label = labelsByName.get(name);
         await gmailRequest(`/labels/${encodeURIComponent(label.id)}`, token, {
-          body: { color: CATEGORY_LABEL_COLOR },
+          body: { color: CATEGORY_LABEL_COLORS[category] },
           method: "PATCH",
         });
       }
@@ -525,6 +624,7 @@ export function createGmailService({ config, fetchImpl = fetch, firestore, now =
       }
       await reference.set({
         gmailCategoryLabelFingerprint: fingerprint,
+        gmailCategoryLabelIds: categoryLabelIds,
         gmailCategoryLabelsSyncedAt: new Date(now()),
         gmailCategoryLabelSyncVersion: CATEGORY_LABEL_SYNC_VERSION,
       }, { merge: true });
@@ -683,7 +783,7 @@ export function createGmailService({ config, fetchImpl = fetch, firestore, now =
       if (!labelsByName.has(targetName)) {
         const created = await gmailRequest("/labels", token, {
           body: {
-            color: CATEGORY_LABEL_COLOR,
+            color: CATEGORY_LABEL_COLORS[resolvedCategory],
             labelListVisibility: "labelShow",
             messageListVisibility: "show",
             name: targetName,
@@ -694,7 +794,7 @@ export function createGmailService({ config, fetchImpl = fetch, firestore, now =
       }
       const targetLabel = labelsByName.get(targetName);
       await gmailRequest(`/labels/${encodeURIComponent(targetLabel.id)}`, token, {
-        body: { color: CATEGORY_LABEL_COLOR },
+        body: { color: CATEGORY_LABEL_COLORS[resolvedCategory] },
         method: "PATCH",
       });
       const removeLabelIds = Object.values(CATEGORY_LABELS)
@@ -707,6 +807,7 @@ export function createGmailService({ config, fetchImpl = fetch, firestore, now =
       });
 
       const reviewedAt = new Date(now());
+      const previousMessage = messageSnapshot.data();
       const update = {
         category: resolvedCategory,
         classificationReason: `Resolved by a human reviewer as ${targetName}.`,
@@ -714,6 +815,9 @@ export function createGmailService({ config, fetchImpl = fetch, firestore, now =
         classificationStatus: "CLASSIFIED",
         confidence: 100,
         humanReviewedAt: reviewedAt,
+        manualCategoryChangeSource: "EXTENSION",
+        manualCategoryChangedAt: reviewedAt,
+        manualCategoryUndo: categoryUndoSnapshot(previousMessage),
         reviewReason: null,
         status: "CLASSIFIED",
       };
@@ -722,6 +826,79 @@ export function createGmailService({ config, fetchImpl = fetch, firestore, now =
         message: { ...update, humanReviewedAt: reviewedAt.toISOString() },
         messageId,
       };
+    },
+
+    async revokeMessageCategory(connectionId, messageId) {
+      const { data, reference } = await connection(connectionId);
+      const messageReference = reference.collection("messages").doc(messageId);
+      const messageSnapshot = await messageReference.get();
+      if (!messageSnapshot.exists) {
+        const error = new Error("Email message was not found.");
+        error.statusCode = 404;
+        throw error;
+      }
+      const message = messageSnapshot.data();
+      const undo = message.manualCategoryUndo;
+      const restoredCategory = String(undo?.category || "").trim().toUpperCase();
+      if (!CATEGORY_LABELS[restoredCategory]) {
+        const error = new Error("There is no label change available to revoke.");
+        error.statusCode = 409;
+        throw error;
+      }
+
+      const token = await accessToken(data);
+      const existing = await gmailRequest("/labels", token);
+      const labelsByName = new Map((existing.labels || []).map((label) => [label.name, label]));
+      const targetName = CATEGORY_LABELS[restoredCategory];
+      if (!labelsByName.has(targetName)) {
+        const created = await gmailRequest("/labels", token, {
+          body: {
+            color: CATEGORY_LABEL_COLORS[restoredCategory],
+            labelListVisibility: "labelShow",
+            messageListVisibility: "show",
+            name: targetName,
+          },
+          method: "POST",
+        });
+        labelsByName.set(created.name, created);
+      }
+      const targetLabel = labelsByName.get(targetName);
+      await gmailRequest(`/labels/${encodeURIComponent(targetLabel.id)}`, token, {
+        body: { color: CATEGORY_LABEL_COLORS[restoredCategory] },
+        method: "PATCH",
+      });
+      const removeLabelIds = Object.values(CATEGORY_LABELS)
+        .filter((name) => name !== targetName)
+        .map((name) => labelsByName.get(name)?.id)
+        .filter(Boolean);
+      await gmailRequest(`/messages/${encodeURIComponent(messageId)}/modify`, token, {
+        body: { addLabelIds: [targetLabel.id], removeLabelIds },
+        method: "POST",
+      });
+
+      const update = {
+        ...undo,
+        manualCategoryChangeSource: null,
+        manualCategoryChangedAt: null,
+        manualCategoryUndo: null,
+      };
+      if (restoredCategory === "HUMAN_REVIEW") {
+        Object.assign(update, {
+          comparisonReviewStatus: null,
+          comparisonReviewUpdatedAt: null,
+          comparisonReviewedAt: null,
+          documentComparison: null,
+          documentProcessedAt: null,
+          documentProcessingError: null,
+          documentProcessingVersion: null,
+          documentReviewReason: null,
+          documentWorkflowStatus: null,
+          draftBlDocument: null,
+          siDocument: null,
+        });
+      }
+      await messageReference.set(update, { merge: true });
+      return { message: update, messageId };
     },
 
     async createHumanReviewDraft(connectionId, messageId, issueType, editedBody) {

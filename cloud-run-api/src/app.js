@@ -222,6 +222,21 @@ export function createApp({ classificationService = null, documentService = null
         return;
       }
 
+      const revokeMessageCategoryRoute = url.pathname.match(/^\/api\/messages\/([^/]+)\/category\/revoke$/);
+      if (request.method === "POST" && revokeMessageCategoryRoute) {
+        const session = await oauthService.authenticate(request.headers.authorization);
+        json(
+          request,
+          response,
+          200,
+          await gmailService.revokeMessageCategory(
+            session.connectionId,
+            decodeURIComponent(revokeMessageCategoryRoute[1]),
+          ),
+        );
+        return;
+      }
+
       const reviewDraftRoute = url.pathname.match(/^\/api\/messages\/([^/]+)\/review-draft$/);
       if (request.method === "POST" && reviewDraftRoute) {
         const session = await oauthService.authenticate(request.headers.authorization);

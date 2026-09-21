@@ -84,9 +84,13 @@ sender-addressed Gmail response draft for missing, ambiguous, unreadable, or low
 
 `POST /api/labels/sync` creates six top-level category labels (`Document Comparison`,
 `New SI Requests`, `Invoice Queries`, `General Messages`, `Spam Email`, and `Email Intent Uncertain`)
-with one consistent VeriCargo orange color and applies the appropriate label to every
+with their configured category colors and applies the appropriate label to every
 Gemini-classified Gmail message in bulk. It migrates
 both the legacy `VeriCargo/<category>` sublabels and `VeriCargo - <category>` labels, removes the
 obsolete category labels, and preserves `INBOX` and all unrelated Gmail labels.
+Incremental Gmail history synchronization also observes manual changes between these six labels
+and reflects the newest active category in VeriCargo. Human Review category resolutions retain an
+undo snapshot; `POST /api/messages/:id/category/revoke` restores both the previous VeriCargo
+classification and Gmail label.
 
 Never copy an OAuth client secret or downloaded `client_secret*.json` file into this directory.

@@ -83,19 +83,31 @@ test("migrates old VeriCargo labels to category-only labels and bulk-applies exa
     "Spam Email",
     "Email Intent Uncertain",
   ]);
-  assert.equal(createdLabelBodies.every((label) => (
-    label.color.backgroundColor === "#ff7537" && label.color.textColor === "#ffffff"
-  )), true);
+  assert.equal(createdLabelBodies.every((label) => label.color.textColor === "#ffffff"), true);
   assert.equal(labelColorUpdates.length, 6);
-  assert.equal(labelColorUpdates.every(({ color }) => (
-    color.backgroundColor === "#ff7537" && color.textColor === "#ffffff"
-  )), true);
+  assert.deepEqual(createdLabelBodies.map(({ color }) => color.backgroundColor), [
+    "#ff7537",
+    "#8e63ce",
+    "#16a765",
+    "#cc3a21",
+    "#666666",
+    "#285bac",
+  ]);
+  assert.deepEqual(labelColorUpdates.map(({ color }) => color.backgroundColor), [
+    "#ff7537",
+    "#8e63ce",
+    "#16a765",
+    "#cc3a21",
+    "#666666",
+    "#285bac",
+  ]);
+  assert.equal(labelColorUpdates.every(({ color }) => color.textColor === "#ffffff"), true);
   assert.equal(modifications.length, 2);
   assert.deepEqual(modifications[0].ids, ["message-1"]);
   assert.deepEqual(modifications[1].ids, ["message-2"]);
   assert.equal(modifications.some((entry) => entry.removeLabelIds.includes("INBOX")), false);
   assert.deepEqual(deletedLabels, ["legacy-document", "prefixed-review", "legacy-parent"]);
-  assert.equal(connectionWrites[0].gmailCategoryLabelSyncVersion, "vericargo-category-labels-v4-uniform-color");
+  assert.equal(connectionWrites[0].gmailCategoryLabelSyncVersion, "vericargo-category-labels-v5-category-colors");
 });
 
 const gmailMessage = (id, historyId = "100") => ({
@@ -116,14 +128,22 @@ const gmailMessage = (id, historyId = "100") => ({
   threadId: `thread-${id}`,
 });
 
-const makeSyncFirestore = (connectionData, shownCount, storedMessageIds = []) => {
+const makeSyncFirestore = (connectionData, shownCount, storedMessageIds = [], storedMessageData = {}) => {
   const batchWrites = [];
   const connectionWrites = [];
   const messageReferences = new Map();
   const messagesCollection = {
     count: () => ({ get: async () => ({ data: () => ({ count: shownCount }) }) }),
     doc: (id) => {
-      if (!messageReferences.has(id)) messageReferences.set(id, { id });
+      if (!messageReferences.has(id)) {
+        messageReferences.set(id, {
+          get: async () => ({
+            data: () => storedMessageData[id] || {},
+            exists: Object.hasOwn(storedMessageData, id),
+          }),
+          id,
+        });
+      }
       return messageReferences.get(id);
     },
     get: async () => ({
@@ -242,6 +262,64 @@ test("removes a message when Gmail moves it out of Inbox and into Trash", async 
   assert.equal(setup.batchWrites.some(({ operation, target }) => (
     operation === "set" && target.id === "message-trashed"
   )), false);
+});
+
+test("reflects a Gmail category-label change back into the extension", async () => {
+  const encryptionKey = Buffer.alloc(32, 14);
+  const setup = makeSyncFirestore({
+    encryptedRefreshToken: encryptSecret("refresh-token", encryptionKey),
+    gmailHistoryId: "100",
+    inboxMessageCount: 1,
+    inboxReconciliationVersion: "vericargo-inbox-reconciliation-v1",
+    initialSyncCompleted: true,
+    status: "SYNCED",
+  }, 1, ["message-relabeled"], {
+    "message-relabeled": {
+      category: "GENERAL",
+      classificationReason: "Originally classified as General Messages.",
+      classificationSource: "GEMINI",
+      confidence: 91,
+    },
+  });
+  const fetchImpl = async (url) => {
+    if (url === "https://oauth2.googleapis.com/token") return response({ access_token: "access-token" });
+    if (url.includes("/history?")) {
+      return response({
+        history: [{
+          labelsAdded: [{ labelIds: ["label-spam"], message: { id: "message-relabeled" } }],
+          labelsRemoved: [{ labelIds: ["label-general"], message: { id: "message-relabeled" } }],
+        }],
+        historyId: "108",
+      });
+    }
+    if (url.endsWith("/labels")) {
+      return response({ labels: [
+        { id: "label-general", name: "General Messages" },
+        { id: "label-spam", name: "Spam Email" },
+      ] });
+    }
+    if (url.includes("/messages/message-relabeled?format=full")) {
+      return response({ ...gmailMessage("message-relabeled", "108"), labelIds: ["INBOX", "label-spam"] });
+    }
+    if (url.endsWith("/labels/INBOX")) return response({ messagesTotal: 1 });
+    throw new Error(`Unexpected request: ${url}`);
+  };
+  const service = createGmailService({
+    config: { clientId: "client", clientSecret: "secret", encryptionKey },
+    fetchImpl,
+    firestore: setup.firestore,
+    now: () => 123,
+  });
+
+  await service.syncNextBatch("connection-1");
+
+  const messageWrite = setup.batchWrites.find(({ operation, target }) => (
+    operation === "set" && target.id === "message-relabeled"
+  ));
+  assert.equal(messageWrite.value.category, "SPAM");
+  assert.equal(messageWrite.value.classificationSource, "MANUAL_REVIEW");
+  assert.equal(messageWrite.value.manualCategoryChangeSource, "GMAIL");
+  assert.equal(messageWrite.value.manualCategoryUndo.category, "GENERAL");
 });
 
 test("one-time reconciliation removes Inbox records missed by an older sync", async () => {
@@ -496,11 +574,80 @@ test("resolves uncertain intent with a manual category and updates its Gmail lab
   assert.equal(result.message.category, "GENERAL");
   assert.equal(result.message.classificationSource, "MANUAL_REVIEW");
   assert.equal(result.message.confidence, 100);
+  assert.equal(result.message.manualCategoryUndo.category, "HUMAN_REVIEW");
   assert.deepEqual(JSON.parse(modify.options.body), {
     addLabelIds: ["label-general"],
     removeLabelIds: ["label-review"],
   });
   assert.equal(writes[0].value.category, "GENERAL");
+  assert.deepEqual(writes[0].options, { merge: true });
+});
+
+test("revokes a manual category and restores Email Intent Uncertain in Gmail", async () => {
+  const encryptionKey = Buffer.alloc(32, 15);
+  const writes = [];
+  const gmailRequests = [];
+  const messageReference = {
+    get: async () => ({
+      data: () => ({
+        category: "DOCUMENT_COMPARISON",
+        classificationSource: "MANUAL_REVIEW",
+        documentWorkflowStatus: "READY_FOR_COMPARISON",
+        manualCategoryUndo: {
+          category: "HUMAN_REVIEW",
+          classificationReason: "Intent needs confirmation.",
+          classificationSource: "GEMINI",
+          confidence: 95,
+          reviewReason: "Intent needs confirmation.",
+          status: "CLASSIFIED",
+        },
+      }),
+      exists: true,
+    }),
+    set: async (value, options) => writes.push({ options, value }),
+  };
+  const connectionReference = {
+    collection: () => ({ doc: () => messageReference }),
+    get: async () => ({
+      data: () => ({
+        email: "vericargo@example.com",
+        encryptedRefreshToken: encryptSecret("refresh-token", encryptionKey),
+      }),
+      exists: true,
+    }),
+  };
+  const fetchImpl = async (url, options = {}) => {
+    if (url === "https://oauth2.googleapis.com/token") return response({ access_token: "access-token" });
+    gmailRequests.push({ options, url });
+    if (url.endsWith("/labels") && (!options.method || options.method === "GET")) {
+      return response({ labels: [
+        { id: "label-document", name: "Document Comparison" },
+        { id: "label-review", name: "Email Intent Uncertain" },
+      ] });
+    }
+    if (url.includes("/labels/label-review") && options.method === "PATCH") return response({});
+    if (url.endsWith("/messages/message-1/modify") && options.method === "POST") return response({});
+    throw new Error(`Unexpected request: ${options.method || "GET"} ${url}`);
+  };
+  const service = createGmailService({
+    config: { clientId: "client", clientSecret: "secret", encryptionKey },
+    fetchImpl,
+    firestore: { collection: () => ({ doc: () => connectionReference }) },
+    now: () => Date.parse("2026-09-21T03:00:00.000Z"),
+  });
+
+  const result = await service.revokeMessageCategory("connection-1", "message-1");
+  const modify = gmailRequests.find(({ url }) => url.endsWith("/messages/message-1/modify"));
+
+  assert.equal(result.message.category, "HUMAN_REVIEW");
+  assert.equal(result.message.classificationSource, "GEMINI");
+  assert.equal(result.message.manualCategoryUndo, null);
+  assert.equal(result.message.documentWorkflowStatus, null);
+  assert.deepEqual(JSON.parse(modify.options.body), {
+    addLabelIds: ["label-review"],
+    removeLabelIds: ["label-document"],
+  });
+  assert.equal(writes[0].value.category, "HUMAN_REVIEW");
   assert.deepEqual(writes[0].options, { merge: true });
 });
 

@@ -123,6 +123,11 @@ test("extension connection and message routes use backend sessions", async () =>
       assert.equal(category, "GENERAL");
       return { message: { category, classificationSource: "MANUAL_REVIEW" }, messageId };
     },
+    revokeMessageCategory: async (connectionId, messageId) => {
+      assert.equal(connectionId, "connection-1");
+      assert.equal(messageId, "message-1");
+      return { message: { category: "HUMAN_REVIEW", classificationSource: "GEMINI" }, messageId };
+    },
     syncCategoryLabels: async (connectionId) => {
       assert.equal(connectionId, "connection-1");
       return { applied: 1, labels: 6, skipped: false };
@@ -210,6 +215,15 @@ test("extension connection and message routes use backend sessions", async () =>
     });
     assert.deepEqual(await categoryResponse.json(), {
       message: { category: "GENERAL", classificationSource: "MANUAL_REVIEW" },
+      messageId: "message-1",
+    });
+
+    const revokeCategoryResponse = await fetch(`${apiBase}/api/messages/message-1/category/revoke`, {
+      headers: { Authorization: "Bearer extension-session" },
+      method: "POST",
+    });
+    assert.deepEqual(await revokeCategoryResponse.json(), {
+      message: { category: "HUMAN_REVIEW", classificationSource: "GEMINI" },
       messageId: "message-1",
     });
 
