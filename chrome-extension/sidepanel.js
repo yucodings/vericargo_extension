@@ -386,14 +386,9 @@ const humanReviewQueues = (filter = state.humanReview.filter) => {
       reviewed: state.messages.filter(wasResolvedFromIntentReview),
     };
   }
-  const matching = state.messages.filter((message) => message.documentWorkflowStatus === filter);
   return {
-    pending: matching.filter((message) => !(
-      message.humanReviewDraftIssueType === filter && message.humanReviewDraftCreatedAt
-    )),
-    reviewed: matching.filter((message) => (
-      message.humanReviewDraftIssueType === filter && message.humanReviewDraftCreatedAt
-    )),
+    pending: state.messages.filter((message) => message.documentWorkflowStatus === filter),
+    reviewed: [],
   };
 };
 
@@ -862,6 +857,7 @@ function renderDetail() {
 
 function renderHumanReview() {
   normalizeHumanReviewSelection();
+  const isIntentReview = state.humanReview.filter === "HUMAN_REVIEW";
   const counts = Object.fromEntries(HUMAN_REVIEW_OPTIONS.map(({ id }) => [id, humanReviewQueues(id).pending.length]));
   humanReviewFilters.innerHTML = HUMAN_REVIEW_OPTIONS.map((option) => `
     <button class="human-review-filter ${state.humanReview.filter === option.id ? "active" : ""}" data-human-filter="${option.id}" type="button" aria-pressed="${state.humanReview.filter === option.id}">
@@ -886,15 +882,17 @@ function renderHumanReview() {
         </button>`;
     }).join("")
     : `<div class="empty-list compact">${reviewed ? "No reviewed emails yet." : `No cases currently require ${h(activeLabel.toLowerCase())} review.`}</div>`;
-  humanReviewList.innerHTML = `
-    <section class="human-review-queue pending-queue">
-      <header><span>Pending</span><b>${queues.pending.length}</b></header>
-      <div class="human-review-queue-body" data-human-queue="pending">${queueRows(queues.pending, false)}</div>
-    </section>
-    <section class="human-review-queue reviewed-queue">
-      <header><span>Reviewed</span><b>${queues.reviewed.length}</b></header>
-      <div class="human-review-queue-body" data-human-queue="reviewed">${queueRows(queues.reviewed, true)}</div>
-    </section>`;
+  humanReviewList.classList.toggle("split", isIntentReview);
+  humanReviewList.innerHTML = isIntentReview
+    ? `<section class="human-review-queue pending-queue">
+        <header><span>Pending</span><b>${queues.pending.length}</b></header>
+        <div class="human-review-queue-body" data-human-queue="pending">${queueRows(queues.pending, false)}</div>
+      </section>
+      <section class="human-review-queue reviewed-queue">
+        <header><span>Reviewed</span><b>${queues.reviewed.length}</b></header>
+        <div class="human-review-queue-body" data-human-queue="reviewed">${queueRows(queues.reviewed, true)}</div>
+      </section>`
+    : queueRows(queues.pending, false);
   humanReviewPagination.replaceChildren();
 
   humanPreviewRequestId += 1;
@@ -916,7 +914,6 @@ function renderHumanReview() {
           <p data-human-preview-status>${attachment.attachmentId ? "Loading secure preview…" : "Preview is unavailable for this attachment."}</p>
         </article>`).join("")
     : '<div class="no-attachments">No attachments on this email.</div>';
-  const isIntentReview = state.humanReview.filter === "HUMAN_REVIEW";
   const isReviewedIntent = isIntentReview && wasResolvedFromIntentReview(message);
   let actionMarkup;
   if (isReviewedIntent) {
@@ -1860,7 +1857,6 @@ connectionStatus.addEventListener("click", async (event) => {
 });
 
 async function initialize() {
-  await chrome.storage.local.remove(["blinkCases", "blinkGmailCases", "blinkGmailEmail", "blinkMode"]);
   const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
   hostGmailTabId = activeTab?.id ?? null;
   render();

@@ -1,6 +1,6 @@
-import type { BlinkCase } from "@/domain/models/case";
+import type { VeriCargoCase } from "@/domain/models/case";
 
-export const cases: BlinkCase[] = [
+export const cases: VeriCargoCase[] = [
   { id: "BL-1028", sender: "ops@northstar-logistics.com", subject: "Check draft BL before release", receivedAt: "Today, 09:41", category: "DOCUMENT_COMPARISON", suggestion: "SUGGESTED_MISMATCH", confidence: 0.98, reviewStatus: "PENDING_REVIEW", reason: "Container count differs: SI 3 / Draft BL 4", mismatchCount: 1, evidenceComplete: true },
   { id: "BL-1027", sender: "shipping@meridian-trade.my", subject: "Draft BL verification – BK-7842", receivedAt: "Today, 09:18", category: "DOCUMENT_COMPARISON", suggestion: "SUGGESTED_MATCH", confidence: 0.97, reviewStatus: "PENDING_REVIEW", reason: "All seven fields are equivalent after normalization", mismatchCount: 0, evidenceComplete: true },
   { id: "BL-1026", sender: "export@pacific-goods.com", subject: "Documents", receivedAt: "Today, 08:52", category: "DOCUMENT_COMPARISON", suggestion: "HUMAN_REVIEW", confidence: 0.68, reviewStatus: "IN_REVIEW", reason: "Notify party is partially unreadable in the Draft BL", mismatchCount: 0, evidenceComplete: false },

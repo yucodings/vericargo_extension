@@ -7,7 +7,7 @@ export type Comparison = "MATCH" | "MISMATCH" | "UNRESOLVED";
 export type Suggestion = "SUGGESTED_MATCH" | "SUGGESTED_MISMATCH" | "HUMAN_REVIEW";
 export type ReviewStatus = "PENDING_REVIEW" | "IN_REVIEW" | "CONFIRMED";
 
-export interface BlinkCase {
+export interface VeriCargoCase {
   id: string;
   sender: string;
   subject: string;

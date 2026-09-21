@@ -20,8 +20,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <aside className={`fixed inset-y-0 left-0 z-40 w-[250px] bg-[var(--navy)] text-white transition-transform lg:translate-x-0 ${open ? "translate-x-0" : "-translate-x-full"}`}>
         <div className="flex h-20 items-center justify-between border-b border-white/10 px-6">
           <Link href="/" className="focus-ring flex items-center gap-3 rounded-md" onClick={() => setOpen(false)}>
-            <span className="grid h-10 w-10 place-items-center rounded-xl bg-white text-lg font-extrabold text-[var(--navy)]">B</span>
-            <span><strong className="block text-xl tracking-[0.12em]">BLiNK</strong><small className="block text-xs text-slate-300">Shipping verification</small></span>
+            <span className="grid h-10 w-10 place-items-center rounded-xl bg-white text-lg font-extrabold text-[var(--navy)]">V</span>
+            <span><strong className="block text-xl tracking-[0.12em]">VeriCargo</strong><small className="block text-xs text-slate-300">Shipping verification</small></span>
           </Link>
           <button className="focus-ring rounded-md p-2 lg:hidden" onClick={() => setOpen(false)} aria-label="Close navigation"><X /></button>
         </div>

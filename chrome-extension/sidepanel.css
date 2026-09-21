@@ -189,7 +189,8 @@ main { width: 100%; padding: 12px; }
 .human-review-list-column { min-width: 0; }
 .human-review-list-column > .pagination:empty { display: none; }
 .human-review-list, .human-review-detail { height: max(320px, calc(100vh - 242px)); overscroll-behavior: contain; border: 1px solid var(--line); border-radius: 15px; background: white; scrollbar-color: #9eb0c7 #eef2f7; scrollbar-gutter: stable; scrollbar-width: thin; }
-.human-review-list { display: grid; grid-template-rows: minmax(0, 1fr) minmax(0, 1fr); overflow: hidden; }
+.human-review-list { overflow-y: auto; }
+.human-review-list.split { display: grid; grid-template-rows: minmax(0, 1fr) minmax(0, 1fr); overflow: hidden; }
 .human-review-detail { overflow-y: auto; }
 .human-review-queue { display: grid; min-height: 0; grid-template-rows: auto minmax(0, 1fr); }
 .human-review-queue + .human-review-queue { border-top: 3px solid #d5dce7; }

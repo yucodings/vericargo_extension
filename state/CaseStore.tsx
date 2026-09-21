@@ -10,7 +10,7 @@ interface CaseStoreValue {
 }
 
 const CaseStore = createContext<CaseStoreValue | null>(null);
-const storageKey = "blink-demo-reviews";
+const storageKey = "vericargo-demo-reviews";
 
 export function CaseStoreProvider({ children }: { children: React.ReactNode }) {
   const [reviews, setReviews] = useState<Record<string, ReviewRecord>>(() => {

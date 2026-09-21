@@ -1,4 +1,4 @@
-import type { BlinkCase, Comparison } from "./case";
+import type { Comparison, VeriCargoCase } from "./case";
 
 export interface SourceEvidence {
   rawValue: string;
@@ -28,7 +28,7 @@ export interface AuditEvent {
   status: "COMPLETE" | "ATTENTION" | "PENDING";
 }
 
-export interface DetailedCase extends BlinkCase {
+export interface DetailedCase extends VeriCargoCase {
   emailBody: string;
   provider: string;
   messageId: string;
