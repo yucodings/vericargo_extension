@@ -35,6 +35,8 @@ The active product is the Manifest V3 extension in [`chrome-extension/`](chrome-
 - Chrome extension version: `0.9.34`
 - Manifest version: `3`
 - Minimum Chrome version: `114`
+- Chrome Web Store: [Install or open VeriCargo](https://chrome.google.com/webstore/detail/oibohododddnipfbkoflhmbfkfbmogpj)
+- Store listing status: available through the direct link; Chrome Web Store search indexing may still be pending
 - Backend service: `vericargo-api`
 - Cloud Run region: `asia-southeast1`
 - Backend URL: `https://vericargo-api-8562721906.asia-southeast1.run.app`
@@ -344,6 +346,10 @@ tests/workflow.test.ts        Root workflow tests
 For hackathon testing, the OAuth application can remain in Testing status and explicitly list teammates, judges, and evaluators as test users. Testing-mode authorizations may expire and require reconnection. A public production launch requires the applicable Google OAuth verification and possibly a restricted-scope security assessment.
 
 ## Load the Chrome extension
+
+The published VeriCargo extension is available from the [Chrome Web Store](https://chrome.google.com/webstore/detail/oibohododddnipfbkoflhmbfkfbmogpj). The direct listing is live, although it may not appear in Chrome Web Store search results until indexing is complete.
+
+For local development or testing an unpublished build, use Chrome's **Load unpacked** workflow below.
 
 The committed manifest currently points to the deployed VeriCargo Cloud Run service.
 
